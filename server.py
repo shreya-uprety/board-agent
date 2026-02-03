@@ -204,6 +204,9 @@ async def run_chat_agent(payload: list[dict]):
     Chat endpoint using board agent architecture.
     Accepts chat history and returns agent response.
     """
+    import time
+    request_start = time.time()
+    logger.info(f"⏱️ /send-chat: REQUEST RECEIVED at {request_start}")
     try:
         if patient_manager:
             # Extract patient_id if provided in first message metadata
@@ -211,7 +214,9 @@ async def run_chat_agent(payload: list[dict]):
                 patient_id = payload[0].get('patient_id', patient_manager.get_patient_id())
                 patient_manager.set_patient_id(patient_id)
         
+        logger.info(f"⏱️ /send-chat: Calling chat_agent...")
         answer = await chat_model.chat_agent(payload)
+        logger.info(f"⏱️ /send-chat: chat_agent returned in {time.time()-request_start:.2f}s")
         logger.info(f"Agent Answer: {answer[:200]}...")
         return {"response": answer, "status": "success"}
         

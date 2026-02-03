@@ -7,11 +7,14 @@ import time
 import json
 import asyncio
 import os
+import logging
 import threading
 from dotenv import load_dotenv
 import side_agent
 import canvas_ops
 load_dotenv()
+
+logger = logging.getLogger("chat-model")
 
 # Lazy initialization - configure only when needed
 _genai_configured = False
@@ -64,15 +67,20 @@ async def chat_agent(chat_history: list[dict]) -> str:
     Chat Agent - Optimized for speed.
     Takes chat history and returns agent response.
     """
+    start_time = time.time()
     query = chat_history[-1].get('content')
+    logger.info(f"⏱️ chat_agent: START - Query: {query[:50]}...")
     
     # Fast tool routing (keyword-based, no API call)
     tool_res = side_agent.parse_tool(query)
+    logger.info(f"⏱️ chat_agent: parse_tool in {time.time()-start_time:.2f}s")
     print("Tools use:", tool_res)
 
     # Get context once (uses cache)
-    context_raw = canvas_ops.get_board_items(quiet=True)
+    t0 = time.time()
+    context_raw = canvas_ops.get_board_items(quiet=False)  # Show logs for debugging
     context = json.dumps(context_raw, indent=2)
+    logger.info(f"⏱️ chat_agent: get_board_items in {time.time()-t0:.2f}s (context: {len(context)} chars)")
 
     tool = tool_res.get('tool')
     

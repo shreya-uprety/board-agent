@@ -17,7 +17,7 @@ print("#### Current Patient ID: ", patient_manager.get_patient_id())
 # Simple in-memory cache for board items to avoid repeated API calls
 _board_items_cache = {}
 _cache_expiry = {}
-CACHE_TTL_SECONDS = 30  # Cache board items for 30 seconds
+CACHE_TTL_SECONDS = 300  # Cache board items for 5 MINUTES (board API has cold starts)
 
 # Load object descriptions if available (optional)
 object_desc_data = {}
@@ -82,34 +82,75 @@ def get_board_items(quiet=False, force_refresh=False):
     """Get all board items for current patient. Set quiet=True to reduce log noise."""
     global _board_items_cache, _cache_expiry
     
+    import logging
+    logger = logging.getLogger("canvas-ops")
+    
     patient_id = patient_manager.get_patient_id().lower()
     url = BASE_URL + f"/api/board-items/patient/{patient_id}"
+    local_path = f"{config.output_dir}/board_items_{patient_id}.json"
     
-    # Check cache first (unless force refresh)
+    logger.info(f"⏱️ get_board_items: START for {patient_id}")
+    
+    # Check in-memory cache first (unless force refresh)
     current_time = time.time()
     if not force_refresh and patient_id in _board_items_cache:
         if current_time < _cache_expiry.get(patient_id, 0):
+            logger.info(f"⏱️ get_board_items: CACHE HIT (memory)")
             if not quiet:
                 print(f"⚡ Using cached board items for {patient_id}")
             return _board_items_cache[patient_id]
     
+    # Check local file cache BEFORE making API call (fast fallback)
+    if not force_refresh and os.path.exists(local_path):
+        try:
+            with open(local_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data and len(data) > 0:
+                    # Update in-memory cache from file
+                    _board_items_cache[patient_id] = data
+                    _cache_expiry[patient_id] = time.time() + CACHE_TTL_SECONDS
+                    logger.info(f"⏱️ get_board_items: CACHE HIT (file) - {len(data)} items")
+                    if not quiet:
+                        print(f"📂 Using cached file for {patient_id} ({len(data)} items)")
+                    return data
+        except Exception as e:
+            logger.warning(f"Failed to read local cache: {e}")
+    
     data = []
     
-    # 1. Try fetching from API with short timeout
+    # Try fetching from API (may be slow due to Cloud Run cold start)
+    logger.info(f"⏱️ get_board_items: Fetching from API...")
     try:
         if not quiet:
             print(f"🌍 Fetching from: {url}")
-        response = requests.get(url, timeout=3)
+        response = requests.get(url, timeout=30)  # Longer timeout for Cloud Run cold starts
         
         if response.status_code == 200:
             try:
-                data = response.json()
+                raw_data = response.json()
                 
-                # Handle new API format: {"patientId": "...", "items": [...]}
-                if isinstance(data, dict) and 'items' in data:
-                    if not quiet:
-                        print(f"✅ New API format detected, extracting items")
-                    data = data['items']
+                # Handle API format: {"patientId": "...", "items": [...]} 
+                # OR nested: {"patientId": "...", "items": {"items": [...]}}
+                if isinstance(raw_data, dict):
+                    if 'items' in raw_data:
+                        items = raw_data['items']
+                        # Check for nested items.items structure
+                        if isinstance(items, dict) and 'items' in items:
+                            if not quiet:
+                                print(f"✅ Nested API format detected (items.items)")
+                            data = items['items']
+                        elif isinstance(items, list):
+                            if not quiet:
+                                print(f"✅ Standard API format detected")
+                            data = items
+                        else:
+                            raise ValueError(f"Unexpected items type: {type(items)}")
+                    else:
+                        raise ValueError("No 'items' key in response")
+                elif isinstance(raw_data, list):
+                    data = raw_data
+                else:
+                    raise ValueError(f"Unexpected response type: {type(raw_data)}")
                 
                 # Validate response is a list
                 if not isinstance(data, list):
@@ -122,10 +163,11 @@ def get_board_items(quiet=False, force_refresh=False):
                 _board_items_cache[patient_id] = data
                 _cache_expiry[patient_id] = time.time() + CACHE_TTL_SECONDS
                 
-                # Save to file cache
+                # Save to patient-specific file cache
                 os.makedirs(config.output_dir, exist_ok=True)
-                with open(f"{config.output_dir}/board_items.json", "w", encoding="utf-8") as f:
+                with open(local_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=4)
+                logger.info(f"⏱️ get_board_items: API SUCCESS - {len(data)} items cached")
                 if not quiet:
                     print(f"✅ Fetched {len(data)} items from API")
                 return data
@@ -147,26 +189,10 @@ def get_board_items(quiet=False, force_refresh=False):
     except Exception as e:
         if not quiet:
             print(f"❌ API request failed: {e}")
-        # Fall through to cache fallback
+        # Fall through to return empty
 
-    # 2. Fallback to local file (reached if API fails or returns non-200)
-    local_path = f"{config.output_dir}/board_items.json"
-    if os.path.exists(local_path):
-        if not quiet:
-            print(f"📂 Falling back to local cache: {local_path}")
-        try:
-            with open(local_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if not quiet:
-                    print(f"✅ Loaded {len(data)} items from cache")
-                return data
-        except Exception as e:
-            if not quiet:
-                print(f"❌ Failed to load local cache: {e}")
-    else:
-        if not quiet:
-            print(f"⚠️ No local cache found at {local_path}")
-            
+    # If we get here, both API and cache failed
+    logger.warning(f"⏱️ get_board_items: No data available for {patient_id}")
     return []
 
 
