@@ -1,0 +1,55 @@
+# This file specifies files that are intentionally untracked by gcloudignore.
+# See https://cloud.google.com/sdk/gcloud/reference/topic/gcloudignore
+
+.gcloudignore
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.mypy_cache/
+.pytest_cache/
+.hypothesis/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+test.py
+tests/
+*.test.py
+
+# Documentation
+README.md
+*.md
+
+# Local files
+output/
+.env
+*.json.backup
+note.ipynb
+simple_ui.html
+ui/

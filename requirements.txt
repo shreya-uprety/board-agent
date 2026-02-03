@@ -1,0 +1,22 @@
+# Board Agents Server Dependencies
+# Core web framework
+fastapi
+uvicorn[standard]
+
+# WebSockets (compatible with google-genai)
+websockets
+
+# Utilities
+python-dotenv
+requests
+httpx
+aiohttp
+
+# Google GenAI SDK (new SDK for voice/chat)
+google-genai
+
+# Google Generative AI SDK (for chat_model and side_agent)
+google-generativeai
+
+# Used by chat_agent for RAG context
+numpy
