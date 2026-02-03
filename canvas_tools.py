@@ -110,7 +110,7 @@ class CanvasTools:
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_url}/create-todo",
+                    f"{self.api_url}/enhanced-todo",  # Correct endpoint
                     json=todo_data,
                     timeout=10.0
                 )
@@ -208,7 +208,7 @@ class CanvasTools:
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_url}/create-schedule",
+                    f"{self.api_url}/schedule",  # Correct endpoint
                     json=schedule_payload,
                     timeout=10.0
                 )
@@ -250,14 +250,16 @@ class CanvasTools:
         try:
             logger.info(f"Sending notification: {message[:50]}...")
             
+            # Note: Using doctor-notes as workaround (send-notification doesn't exist)
             notification_payload = {
                 "patientId": patient_id,
-                "message": message
+                "note": message,
+                "type": "notification"
             }
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_url}/send-notification",
+                    f"{self.api_url}/doctor-notes",  # Workaround endpoint
                     json=notification_payload,
                     timeout=10.0
                 )
@@ -301,12 +303,13 @@ class CanvasTools:
             
             diagnosis_payload = {
                 "patientId": patient_id,
+                "zone": "dili-analysis-zone",
                 **diagnosis_data
             }
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_url}/create-diagnosis",
+                    f"{self.api_url}/diagnostic-report",  # Correct endpoint
                     json=diagnosis_payload,
                     timeout=15.0
                 )
@@ -340,7 +343,20 @@ class CanvasTools:
         
         Args:
             patient_id: Patient ID
-            report_data: Patient report data
+            report_data: Patient report data with structure:
+                {
+                    "title": "Patient Summary Report",
+                    "component": "PatientReport",
+                    "props": {
+                        "patientData": {
+                            "name": str,
+                            "mrn": str,
+                            "age": int,
+                            "sex": str,
+                            ...
+                        }
+                    }
+                }
             
         Returns:
             Dict with status and patient report
@@ -348,14 +364,16 @@ class CanvasTools:
         try:
             logger.info(f"Creating patient report for patient {patient_id}")
             
+            # Ensure proper structure with zone and patientId
             report_payload = {
                 "patientId": patient_id,
+                "zone": "patient-report-zone",
                 **report_data
             }
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_url}/create-patient-report",
+                    f"{self.api_url}/patient-report",  # Correct endpoint
                     json=report_payload,
                     timeout=15.0
                 )
@@ -404,7 +422,7 @@ class CanvasTools:
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_url}/create-legal-report",
+                    f"{self.api_url}/legal-compliance",  # Correct endpoint
                     json=legal_payload,
                     timeout=15.0
                 )

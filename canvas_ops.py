@@ -363,33 +363,58 @@ async def create_result(agent_result):
             return data
         
 def create_diagnosis(payload):
-    print("Start create object")
+    print("Start create diagnostic report")
     url = BASE_URL + "/api/diagnostic-report"
-    payload['zone'] = "dili-analysis-zone"
-    payload['patientId'] = patient_manager.get_patient_id()
+    
+    # API expects diagnosticData.patientInformation at root, not inside props
+    # LLM generates: {title, component, props: {pattern, causality, ...}}
+    # API needs: {title, component, diagnosticData: {patientInformation, pattern, causality, ...}, zone, patientId}
+    if 'props' in payload:
+        # Restructure: create diagnosticData from props
+        api_payload = {
+            'title': payload.get('title', 'DILI Diagnostic Panel'),
+            'component': payload.get('component', 'DILIDiagnostic'),
+            'diagnosticData': {
+                'patientInformation': {
+                    'name': payload.get('props', {}).get('pattern', {}).get('patientName', 'Unknown'),
+                    'mrn': payload.get('props', {}).get('pattern', {}).get('mrn', 'Unknown')
+                },
+                **payload.get('props', {})
+            },
+            'zone': "dili-analysis-zone",
+            'patientId': patient_manager.get_patient_id()
+        }
+    else:
+        # Already in correct format
+        api_payload = payload.copy()
+        api_payload['zone'] = "dili-analysis-zone"
+        api_payload['patientId'] = patient_manager.get_patient_id()
+    
     with open(f"{config.output_dir}/diagnosis_create_payload.json", "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=4)
+        json.dump(api_payload, f, ensure_ascii=False, indent=4)
     
     try:
-        response = requests.post(url, json=payload, timeout=15)
+        response = requests.post(url, json=api_payload, timeout=15)
         print(f"Diagnosis API status: {response.status_code}")
         
-        if response.status_code == 200:
+        if response.status_code in [200, 201]:
             data = response.json()
             with open(f"{config.output_dir}/diagnosis_create_response.json", "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
-            return {"status": "success", "data": data, "payload": payload}
+            return {"status": "success", "data": data, "payload": api_payload}
         else:
             # API error - save payload locally and return it as the report
+            error_text = response.text
             print(f"⚠️ Board API returned {response.status_code}, saving report locally")
+            print(f"Error: {error_text}")
             with open(f"{config.output_dir}/diagnosis_create_response.json", "w", encoding="utf-8") as f:
-                json.dump({"status": "local", "payload": payload}, f, ensure_ascii=False, indent=4)
-            return {"status": "local", "message": f"Report saved locally (API returned {response.status_code})", "data": payload}
+                json.dump({"status": "local", "code": response.status_code, "error": error_text, "payload": api_payload}, f, ensure_ascii=False, indent=4)
+            return {"status": "local", "message": f"Report saved locally (API returned {response.status_code})", "data": api_payload}
     except Exception as e:
         print(f"❌ Error creating diagnosis: {e}")
         with open(f"{config.output_dir}/diagnosis_create_response.json", "w", encoding="utf-8") as f:
-            json.dump({"status": "error", "error": str(e), "payload": payload}, f, ensure_ascii=False, indent=4)
-        return {"status": "local", "message": str(e), "data": payload}    
+            json.dump({"status": "error", "error": str(e), "payload": api_payload}, f, ensure_ascii=False, indent=4)
+        return {"status": "local", "message": str(e), "data": api_payload}    
     # async with aiohttp.ClientSession() as session:
     #     async with session.post(url, json=payload) as response:
     #         with open(f"{config.output_dir}/diagnosis_create_payload.json", "w", encoding="utf-8") as f:
@@ -403,28 +428,50 @@ def create_diagnosis(payload):
         
 async def create_report(payload):
     url = BASE_URL + "/api/patient-report"
-    payload['zone'] = "patient-report-zone"
-    payload['patientId'] = patient_manager.get_patient_id()
+    
+    # API expects patientData at root level, not inside props
+    # The generate_patient_report() returns: {title, component, props: {patientData: {...}}}
+    # API needs: {title, component, patientData: {...}, zone, patientId}
+    if 'props' in payload and 'patientData' in payload.get('props', {}):
+        # Restructure: move patientData from props to root
+        api_payload = {
+            'title': payload.get('title', 'Patient Summary Report'),
+            'component': payload.get('component', 'PatientReport'),
+            'patientData': payload['props']['patientData'],
+            'zone': "patient-report-zone",
+            'patientId': patient_manager.get_patient_id()
+        }
+    else:
+        # Already in correct format or patientData at root
+        api_payload = payload.copy()
+        api_payload['zone'] = "patient-report-zone"
+        api_payload['patientId'] = patient_manager.get_patient_id()
 
     with open(f"{config.output_dir}/report_create_payload.json", "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=4)
+        json.dump(api_payload, f, ensure_ascii=False, indent=4)
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+            async with session.post(url, json=api_payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
                 print(f"Report API status: {response.status}")
+                response_text = await response.text()
+                print(f"Report API response: {response_text[:500]}")
                 
-                if response.status == 200:
-                    data = await response.json()
+                if response.status in [200, 201]:
+                    try:
+                        data = json.loads(response_text)
+                    except:
+                        data = {"raw": response_text}
                     with open(f"{config.output_dir}/report_create_response.json", "w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=4)
-                    return {"status": "success", "data": data, "payload": payload}
+                    return {"status": "success", "data": data, "payload": api_payload}
                 else:
                     # API error - save payload locally
                     print(f"⚠️ Board API returned {response.status}, saving report locally")
+                    print(f"Error body: {response_text}")
                     with open(f"{config.output_dir}/report_create_response.json", "w", encoding="utf-8") as f:
-                        json.dump({"status": "local", "payload": payload}, f, ensure_ascii=False, indent=4)
-                    return {"status": "local", "message": f"Report saved locally (API returned {response.status})", "data": payload}
+                        json.dump({"status": "local", "code": response.status, "error_body": response_text, "payload": api_payload}, f, ensure_ascii=False, indent=4)
+                    return {"status": "local", "message": f"Report saved locally (API returned {response.status})", "data": api_payload}
     except Exception as e:
         print(f"❌ Error creating report: {e}")
         with open(f"{config.output_dir}/report_create_response.json", "w", encoding="utf-8") as f:
@@ -516,28 +563,59 @@ async def create_notification(payload):
 async def create_legal(payload):
     """Create legal compliance report on board"""
     url = BASE_URL + "/api/legal-compliance"
-    payload['patientId'] = patient_manager.get_patient_id()
+    
+    # API expects legalData.identification_verification at root, not inside props
+    # LLM generates: {title, component, props: {patientInfo, adverseEventDocumentation, ...}}
+    # API needs: {title, component, legalData: {identification_verification, ...}, zone, patientId}
+    if 'props' in payload:
+        props = payload.get('props', {})
+        patient_info = props.get('patientInfo', {})
+        
+        api_payload = {
+            'title': payload.get('title', 'Legal Compliance Report'),
+            'component': payload.get('component', 'LegalReport'),
+            'legalData': {
+                'identification_verification': {
+                    'patient_name': patient_info.get('name', 'Unknown'),
+                    'mrn': patient_info.get('mrn', 'Unknown'),
+                    'date_of_birth': patient_info.get('dateOfBirth', ''),
+                    'patient_id': patient_info.get('patientId', '')
+                },
+                **props  # Include all the other props data
+            },
+            'zone': "medico-legal-report-zone",
+            'patientId': patient_manager.get_patient_id()
+        }
+    else:
+        api_payload = payload.copy()
+        api_payload['zone'] = "medico-legal-report-zone"
+        api_payload['patientId'] = patient_manager.get_patient_id()
 
     with open(f"{config.output_dir}/legal_create_payload.json", "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=4)
+        json.dump(api_payload, f, ensure_ascii=False, indent=4)
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+            async with session.post(url, json=api_payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
                 print(f"Legal API status: {response.status}")
+                response_text = await response.text()
+                print(f"Legal API response: {response_text[:500]}")
                 
                 if response.status in [200, 201]:
-                    data = await response.json()
+                    try:
+                        data = json.loads(response_text)
+                    except:
+                        data = {"raw": response_text}
                     with open(f"{config.output_dir}/legal_create_response.json", "w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=4)
-                    return {"status": "success", "data": data, "payload": payload}
+                    return {"status": "success", "data": data, "payload": api_payload}
                 else:
-                    print(f"⚠️ Legal API returned {response.status}")
+                    print(f"⚠️ Legal API returned {response.status}: {response_text}")
                     with open(f"{config.output_dir}/legal_create_response.json", "w", encoding="utf-8") as f:
-                        json.dump({"status": "local", "payload": payload}, f, ensure_ascii=False, indent=4)
-                    return {"status": "local", "message": f"Legal report saved locally (API returned {response.status})", "data": payload}
+                        json.dump({"status": "local", "code": response.status, "error": response_text, "payload": api_payload}, f, ensure_ascii=False, indent=4)
+                    return {"status": "local", "message": f"Legal report saved locally (API returned {response.status})", "data": api_payload}
     except Exception as e:
         print(f"❌ Error creating legal report: {e}")
         with open(f"{config.output_dir}/legal_create_response.json", "w", encoding="utf-8") as f:
-            json.dump({"status": "error", "error": str(e), "payload": payload}, f, ensure_ascii=False, indent=4)
-        return {"status": "local", "message": str(e), "data": payload}
+            json.dump({"status": "error", "error": str(e), "payload": api_payload}, f, ensure_ascii=False, indent=4)
+        return {"status": "local", "message": str(e), "data": api_payload}
