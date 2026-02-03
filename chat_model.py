@@ -50,12 +50,13 @@ async def get_answer(query: str, conversation_text: str = '', context: str = '')
         context = json.dumps(context_raw, indent=2)
     
     # Keep prompt concise for faster response
-    prompt = f"""Answer briefly (1-3 sentences). Be direct.
+    prompt = f"""Answer the user query using the patient data from the board context.
+Be helpful and informative. Use 1-3 sentences.
 
 Query: {query}
 
-Context:
-{context[:15000]}"""  # Limit context size for speed
+Context (Board Data):
+{context[:30000]}"""  # Increased context size to include sidebar data
 
     model = _get_model()
     response = model.generate_content(prompt)

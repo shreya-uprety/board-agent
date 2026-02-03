@@ -36,6 +36,7 @@ except Exception as e:
 def board_items_process(data):
     exclude_keys = ["x","y","width","height","createdAt","updatedAt","color","rotation", "draggable"]
     clean_data = []
+    sidebar_item = None  # Store sidebar separately to put first
     
     # Validate input is a list
     if not isinstance(data, list):
@@ -55,7 +56,11 @@ def board_items_process(data):
             for k,v in item.items():
                 if k not in exclude_keys:
                     clean_item[k] = v
-            clean_data.append(clean_item)
+            # Check if this is sidebar (contains patient info) - save separately
+            if clean_item.get('id') == 'sidebar-1' or clean_item.get('componentType') == 'Sidebar':
+                sidebar_item = clean_item
+            else:
+                clean_data.append(clean_item)
 
     for d in clean_data:
         if not d: 
@@ -75,6 +80,10 @@ def board_items_process(data):
         elif d.get('type') == 'component':
                 if d.get('id') in existing_desc_ids:
                     d['description'] = object_desc_data.get(d.get('id'), '')
+
+    # Put sidebar (patient info) FIRST so it's always in the context
+    if sidebar_item:
+        clean_data.insert(0, sidebar_item)
 
     return clean_data
 
@@ -355,7 +364,7 @@ async def create_result(agent_result):
         
 def create_diagnosis(payload):
     print("Start create object")
-    url = BASE_URL + "/api/dili-diagnostic"
+    url = BASE_URL + "/api/diagnostic-report"
     payload['zone'] = "dili-analysis-zone"
     payload['patientId'] = patient_manager.get_patient_id()
     with open(f"{config.output_dir}/diagnosis_create_payload.json", "w", encoding="utf-8") as f:
@@ -394,7 +403,7 @@ def create_diagnosis(payload):
         
 async def create_report(payload):
     url = BASE_URL + "/api/patient-report"
-    payload['zone'] = "dili-analysis-zone"
+    payload['zone'] = "patient-report-zone"
     payload['patientId'] = patient_manager.get_patient_id()
 
     with open(f"{config.output_dir}/report_create_payload.json", "w", encoding="utf-8") as f:
@@ -424,21 +433,14 @@ async def create_report(payload):
         
 async def create_schedule(payload):
     url = BASE_URL + "/api/schedule"
-    
-    # API requires patientId and schedulingContext
-    scheduling_context = payload.get("schedulingContext") or payload.get("description") or payload.get("title") or "Follow-up appointment scheduling"
-    
-    api_payload = {
-        "patientId": patient_manager.get_patient_id(),
-        "schedulingContext": scheduling_context
-    }
+    payload["patientId"] = patient_manager.get_patient_id()
 
     with open(f"{config.output_dir}/schedule_create_payload.json", "w", encoding="utf-8") as f:
-        json.dump(api_payload, f, ensure_ascii=False, indent=4)
+        json.dump(payload, f, ensure_ascii=False, indent=4)
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=api_payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
                 print(f"Schedule API status: {response.status}")
                 
                 if response.status in [200, 201]:
@@ -449,7 +451,7 @@ async def create_schedule(payload):
                         "status": "success",
                         "message": "Schedule panel created on board",
                         "api_response": data,
-                        "payload_sent": api_payload
+                        "id": data.get("id")
                     }
                 else:
                     print(f"⚠️ Schedule API returned {response.status}")
@@ -457,24 +459,23 @@ async def create_schedule(payload):
                         json.dump({"status": "error", "code": response.status}, f, ensure_ascii=False, indent=4)
                     return {
                         "status": "local",
-                        "message": f"Schedule saved locally (API returned {response.status})",
-                        "payload_sent": api_payload
+                        "message": f"Schedule saved locally (API returned {response.status})"
                     }
     except Exception as e:
         print(f"❌ Error creating schedule: {e}")
         return {
             "status": "error",
-            "message": str(e),
-            "payload_sent": payload
+            "message": str(e)
         }
         
 async def create_notification(payload):
-    url = BASE_URL + "/api/send-notification"
+    # Note: No dedicated notification endpoint - using doctor-notes as workaround
+    url = BASE_URL + "/api/doctor-notes"
     
-    # API only accepts patientId and message - no type field
     api_payload = {
         "patientId": patient_manager.get_patient_id(),
-        "message": payload.get("message", "Notification from MedForce Agent")
+        "note": payload.get("message", "Notification from MedForce Agent"),
+        "type": "notification"
     }
 
     with open(f"{config.output_dir}/notification_create_payload.json", "w", encoding="utf-8") as f:
@@ -511,3 +512,32 @@ async def create_notification(payload):
             "message": str(e),
             "payload_sent": payload
         }
+
+async def create_legal(payload):
+    """Create legal compliance report on board"""
+    url = BASE_URL + "/api/legal-compliance"
+    payload['patientId'] = patient_manager.get_patient_id()
+
+    with open(f"{config.output_dir}/legal_create_payload.json", "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=4)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                print(f"Legal API status: {response.status}")
+                
+                if response.status in [200, 201]:
+                    data = await response.json()
+                    with open(f"{config.output_dir}/legal_create_response.json", "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=4)
+                    return {"status": "success", "data": data, "payload": payload}
+                else:
+                    print(f"⚠️ Legal API returned {response.status}")
+                    with open(f"{config.output_dir}/legal_create_response.json", "w", encoding="utf-8") as f:
+                        json.dump({"status": "local", "payload": payload}, f, ensure_ascii=False, indent=4)
+                    return {"status": "local", "message": f"Legal report saved locally (API returned {response.status})", "data": payload}
+    except Exception as e:
+        print(f"❌ Error creating legal report: {e}")
+        with open(f"{config.output_dir}/legal_create_response.json", "w", encoding="utf-8") as f:
+            json.dump({"status": "error", "error": str(e), "payload": payload}, f, ensure_ascii=False, indent=4)
+        return {"status": "local", "message": str(e), "data": payload}

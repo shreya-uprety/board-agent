@@ -701,7 +701,8 @@ async def create_legal_doc():
         await canvas_ops.update_todo({"id": todo_id, "task_id": "legal-2", "index": "1", "status": "finished"})
         await canvas_ops.update_todo({"id": todo_id, "task_id": "legal-2", "index": "", "status": "finished"})
         
-        board_response = await canvas_ops.create_report(result)
+        # Use dedicated legal-compliance endpoint
+        board_response = await canvas_ops.create_legal(result)
         
         return {"generated": result, "board_response": board_response, "todo_id": todo_id}
         
