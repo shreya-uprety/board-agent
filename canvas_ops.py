@@ -298,12 +298,12 @@ async def create_todo(payload_body):
     """Create TODO using API v2.0.0 /api/todos endpoint"""
     url = BASE_URL + "/api/todos"
 
-    # API v2.0.0 expects full nested structure with id, text, status, agent, subTodos
-    # Format: {title, description?, todos: [{id, text, status, agent, subTodos: [{text, status}]}], patientId}
+    # API v2.0.0 expects: {title, todo_items: [...], patientId}
+    # Note: API expects 'todo_items' not 'todos'
     
     payload = {
         "title": payload_body.get("title", "Task List"),
-        "todos": payload_body.get("todos", []),
+        "todo_items": payload_body.get("todos", []),  # Rename 'todos' to 'todo_items'
         "patientId": patient_manager.get_patient_id()
     }
     
@@ -315,10 +315,24 @@ async def create_todo(payload_body):
         async with session.post(url, json=payload) as response:
             with open(f"{config.output_dir}/todo_payload.json", "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=4)
-            data = await response.json()
-            with open(f"{config.output_dir}/todo_response.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-            return data
+            
+            response_text = await response.text()
+            print(f"TODO API status: {response.status}")
+            
+            if response.status in [200, 201]:
+                try:
+                    data = json.loads(response_text)
+                    with open(f"{config.output_dir}/todo_response.json", "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=4)
+                    return data
+                except:
+                    print(f"⚠️ Could not parse TODO response: {response_text[:200]}")
+                    return {"id": None, "error": "Could not parse response"}
+            else:
+                print(f"⚠️ TODO creation failed: {response.status} - {response_text[:200]}")
+                with open(f"{config.output_dir}/todo_response.json", "w", encoding="utf-8") as f:
+                    json.dump({"error": response_text, "status": response.status}, f, ensure_ascii=False, indent=4)
+                return {"id": None, "error": response_text}
 
 async def update_todo(payload):
     """Update TODO status using POST /api/todos/update-status"""
