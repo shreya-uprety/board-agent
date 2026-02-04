@@ -346,6 +346,12 @@ async def update_todo(payload):
         "status": payload.get("status"),
         "patientId": patient_manager.get_patient_id()
     }
+    
+    # Add index for subtodo updates (use string format)
+    if "subtodo_index" in payload:
+        update_payload["index"] = str(payload.get("subtodo_index"))
+    else:
+        update_payload["index"] = ""
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=update_payload) as response:

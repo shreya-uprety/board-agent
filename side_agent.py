@@ -479,25 +479,51 @@ async def _animate_todo_tasks(todo_id: str, tasks: list):
                 print(f"⚠️ Task {i} has no id, skipping")
                 continue
             
-            # Mark parent task as executing
+            # Step 1: Mark parent task as executing
             print(f"⏳ Task {task_id}: pending → executing")
             await asyncio.sleep(2)
-            await canvas_ops.update_todo({"id": todo_id, "task_id": task_id, "status": "executing"})
+            await canvas_ops.update_todo({
+                "id": todo_id, 
+                "task_id": task_id, 
+                "status": "executing"
+            })
             
-            # Wait for subtodos (if any) - simulate processing time
+            # Step 2: Animate all subtodos if they exist
             subtodos = task.get('subTodos', [])
             if subtodos:
-                processing_time = len(subtodos) * 2  # 2 seconds per subtodo
-                print(f"  ⏱️ Processing {len(subtodos)} subtodos ({processing_time}s)")
-                await asyncio.sleep(processing_time)
+                print(f"  📋 Processing {len(subtodos)} subtodos for {task_id}")
+                for j, subtodo in enumerate(subtodos):
+                    # Mark subtodo as executing
+                    print(f"    ⏳ Subtodo {j}: pending → executing")
+                    await asyncio.sleep(2)
+                    await canvas_ops.update_todo({
+                        "id": todo_id, 
+                        "task_id": task_id,
+                        "subtodo_index": j,
+                        "status": "executing"
+                    })
+                    
+                    # Mark subtodo as finished
+                    print(f"    ✅ Subtodo {j}: executing → finished")
+                    await asyncio.sleep(2)
+                    await canvas_ops.update_todo({
+                        "id": todo_id, 
+                        "task_id": task_id,
+                        "subtodo_index": j,
+                        "status": "finished"
+                    })
             else:
-                # No subtodos, just wait standard time
+                # No subtodos, just wait
                 await asyncio.sleep(2)
             
-            # Mark parent task as finished
+            # Step 3: Mark parent task as finished
             print(f"✅ Task {task_id}: executing → finished")
-            await canvas_ops.update_todo({"id": todo_id, "task_id": task_id, "status": "finished"})
-            await asyncio.sleep(1)  # Brief pause before next task
+            await canvas_ops.update_todo({
+                "id": todo_id, 
+                "task_id": task_id, 
+                "status": "finished"
+            })
+            await asyncio.sleep(1)
         
         print(f"✅ TODO {todo_id} animation completed")
     except Exception as e:
