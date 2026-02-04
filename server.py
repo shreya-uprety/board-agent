@@ -350,12 +350,17 @@ async def canvas_prepare_easl_query(payload: dict):
 
 @app.post("/api/canvas/create-schedule")
 async def canvas_create_schedule(payload: dict):
-    """Create a schedule on the board"""
+    """Create a schedule on the board using AI to generate structured data"""
     try:
         if patient_manager and payload.get('patient_id'):
             patient_manager.set_patient_id(payload['patient_id'])
         
-        result = await canvas_ops.create_schedule(payload)
+        # Extract the scheduling request
+        query = payload.get('schedulingContext', payload.get('query', 'Create a follow-up appointment schedule'))
+        context = payload.get('context', '')
+        
+        # Use AI to generate full structured schedule
+        result = await side_agent.create_schedule(query, context)
         return {"status": "success", "data": result}
     except Exception as e:
         logger.error(f"Error creating schedule: {e}")
@@ -383,22 +388,61 @@ async def canvas_create_lab_results(payload: dict):
         if patient_manager and payload.get('patient_id'):
             patient_manager.set_patient_id(payload['patient_id'])
         
-        # Transform lab results to board API format
+        # Transform lab results to board API format with range object
         raw_labs = payload.get('labResults', [])
         transformed_labs = []
+        
         for lab in raw_labs:
+            # Parse range string like "7-56" to range object
+            range_str = lab.get('range') or lab.get('normalRange', '0-100')
+            try:
+                if isinstance(range_str, str) and '-' in range_str:
+                    range_parts = range_str.split('-')
+                    min_val = float(range_parts[0].strip())
+                    max_val = float(range_parts[1].strip())
+                else:
+                    min_val, max_val = 0, 100
+            except:
+                min_val, max_val = 0, 100
+            
+            # Convert value to string
+            value = lab.get('value')
+            value_str = str(value) if value is not None else "0"
+            
+            # Map status: high/low/normal -> warning/critical/optimal
+            status = lab.get('status', 'normal').lower()
+            if status in ['high', 'low', 'abnormal']:
+                # Determine if critical or warning based on value
+                try:
+                    val_float = float(value)
+                    if status == 'high':
+                        status = 'critical' if val_float > (max_val * 2) else 'warning'
+                    elif status == 'low':
+                        status = 'critical' if val_float < (min_val * 0.5) else 'warning'
+                except:
+                    status = 'warning'
+            elif status == 'normal':
+                status = 'optimal'
+            
             transformed_labs.append({
                 "parameter": lab.get('name') or lab.get('parameter'),
-                "value": lab.get('value'),
+                "value": value_str,
                 "unit": lab.get('unit', ''),
-                "status": lab.get('status', 'normal'),
-                "range": lab.get('range') or lab.get('normalRange', '')
+                "status": status,
+                "range": {
+                    "min": min_val,
+                    "max": max_val,
+                    "warningMin": min_val,
+                    "warningMax": max_val
+                },
+                "trend": lab.get('trend', 'stable')
             })
         
         lab_payload = {
             "labResults": transformed_labs,
             "date": payload.get('date', datetime.now().strftime('%Y-%m-%d')),
-            "source": payload.get('source', 'Agent Generated')
+            "source": payload.get('source', 'Agent Generated'),
+            "patientId": patient_manager.get_patient_id()
         }
         
         result = await canvas_ops.create_lab(lab_payload)

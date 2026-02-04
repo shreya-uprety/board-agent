@@ -104,12 +104,20 @@ async def chat_agent(chat_history: list[dict]) -> str:
             return f"❌ Navigation failed: {str(e)}"
     
     elif tool == "create_schedule":
-        result = await canvas_ops.create_schedule({"schedulingContext": query})
-        return f"✅ Schedule created: {result.get('message', 'Success')}"
+        result = await side_agent.create_schedule(query, context)
+        return f"✅ Schedule created: {result.get('message', result.get('status', 'Success'))}"
     
     elif tool == "send_notification":
         result = await canvas_ops.create_notification({"message": query})
         return f"✅ Notification sent: {result.get('message', 'Success')}"
+    
+    elif tool == "create_lab_results":
+        # Parse lab values from query using AI
+        lab_data = await side_agent.parse_lab_values(query, context)
+        if lab_data:
+            result = await canvas_ops.create_lab(lab_data)
+            return f"✅ Lab results posted to board: {result.get('id', 'Success')}"
+        return "❌ Could not parse lab values from the query. Please provide values like 'ALT 110, AST 150'"
     
     elif tool == "generate_diagnosis":
         result = await side_agent.create_dili_diagnosis()

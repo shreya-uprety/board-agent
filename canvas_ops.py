@@ -298,29 +298,18 @@ async def create_todo(payload_body):
     """Create TODO using API v2.0.0 /api/todos endpoint"""
     url = BASE_URL + "/api/todos"
 
-    # Convert old payload format to new API v2.0.0 format
-    # Old format: {title, description, todos: [{id, text, status, agent, subTodos}]}
-    # New format: {title, todo_items: [{text, status}], patientId}
-    
-    todo_items = []
-    if "todos" in payload_body:
-        for todo in payload_body["todos"]:
-            todo_items.append({
-                "text": todo.get("text", ""),
-                "status": todo.get("status", "pending")
-            })
-            # Add sub-todos as separate items
-            for sub in todo.get("subTodos", []):
-                todo_items.append({
-                    "text": f"  • {sub.get('text', '')}",
-                    "status": sub.get("status", "pending")
-                })
+    # API v2.0.0 expects full nested structure with id, text, status, agent, subTodos
+    # Format: {title, description?, todos: [{id, text, status, agent, subTodos: [{text, status}]}], patientId}
     
     payload = {
         "title": payload_body.get("title", "Task List"),
-        "todo_items": todo_items if todo_items else [{"text": payload_body.get("description", "Task"), "status": "pending"}],
+        "todos": payload_body.get("todos", []),
         "patientId": patient_manager.get_patient_id()
     }
+    
+    # Add description if provided
+    if "description" in payload_body:
+        payload["description"] = payload_body["description"]
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload) as response:
@@ -332,36 +321,56 @@ async def create_todo(payload_body):
             return data
 
 async def update_todo(payload):
-    url = BASE_URL + "/api/update-todo-status"
+    """Update TODO status using POST /api/todos/update-status"""
+    url = BASE_URL + "/api/todos/update-status"
     payload["patientId"] = patient_manager.get_patient_id()
 
-    # response = requests.post(url, json=payload)
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload) as response:
-            with open(f"{config.output_dir}/upadate_todo_payload.json", "w", encoding="utf-8") as f:
+            with open(f"{config.output_dir}/update_todo_payload.json", "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=4)
-            data = await response.json()
-            # print("Update todo :", data)
-            with open(f"{config.output_dir}/upadate_todo_response.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-            return data
+            
+            print(f"Update TODO API status: {response.status}")
+            
+            if response.status in [200, 201]:
+                data = await response.json()
+                with open(f"{config.output_dir}/update_todo_response.json", "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=4)
+                return data
+            else:
+                error_text = await response.text()
+                print(f"⚠️ Update TODO failed: {response.status} - {error_text[:200]}")
+                return {"status": "error", "code": response.status, "message": error_text}
 
 async def create_lab(payload):
-   
+    """Create lab results - send complete payload with labResults array"""
     url = BASE_URL + "/api/lab-results"
-    payload["patientId"] = patient_manager.get_patient_id()
+    patient_id = patient_manager.get_patient_id()
     
-
-    # response = requests.post(url, json=payload)
+    # Ensure patientId is always set
+    payload["patientId"] = patient_id
+    
+    # Debug output
+    print(f"🧪 Sending lab payload with {len(payload.get('labResults', []))} results")
+    print(f"🔧 Lab payload structure: {json.dumps(payload, indent=2)[:800]}...")
+    
+    # API expects: full payload with labResults array
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload) as response:
             with open(f"{config.output_dir}/lab_payload.json", "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=4)
-
-            data = await response.json()
-
+            
+            response_text = await response.text()
+            print(f"📊 Lab API response ({response.status}): {response_text[:300]}")
+            
+            try:
+                data = json.loads(response_text)
+            except:
+                data = {"error": "Could not parse response", "raw": response_text[:500]}
+            
             with open(f"{config.output_dir}/lab_response.json", "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
+            
             return data
 
 async def create_result(agent_result):
@@ -489,31 +498,25 @@ async def create_report(payload):
         return {"status": "local", "message": str(e), "data": payload}
         
 async def create_schedule(payload):
-    """Create schedule using doctor-notes endpoint as workaround
-    
-    NOTE: API v2.0.0 does not have a dedicated /api/schedule endpoint.
-    Using /api/doctor-notes as a workaround until schedule endpoint is added.
+    """Create schedule using POST /api/components/schedule
+    Payload should already be fully structured from AI generation
     """
-    print("⚠️ Schedule endpoint not available in API v2.0.0 - using doctor-notes workaround")
+    url = BASE_URL + "/api/components/schedule"
     
-    url = BASE_URL + "/api/doctor-notes"
+    # Ensure patientId is set
+    if "patientId" not in payload:
+        payload["patientId"] = patient_manager.get_patient_id()
     
-    # Convert schedule payload to doctor-note format
-    schedule_text = f"SCHEDULE: {payload.get('schedulingContext', 'Schedule created')}"
-    
-    api_payload = {
-        "patientId": patient_manager.get_patient_id(),
-        "note": schedule_text,
-        "type": "schedule"  # Tag it as schedule type
-    }
+    # Debug output
+    print(f"🔧 Sending schedule payload: {json.dumps(payload, indent=2)[:500]}...")
 
     with open(f"{config.output_dir}/schedule_create_payload.json", "w", encoding="utf-8") as f:
-        json.dump({"original": payload, "converted": api_payload}, f, ensure_ascii=False, indent=4)
+        json.dump(payload, f, ensure_ascii=False, indent=4)
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=api_payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                print(f"Schedule (via doctor-notes) API status: {response.status}")
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                print(f"Schedule API status: {response.status}")
                 
                 if response.status in [200, 201]:
                     data = await response.json()
@@ -521,14 +524,15 @@ async def create_schedule(payload):
                         json.dump(data, f, ensure_ascii=False, indent=4)
                     return {
                         "status": "success",
-                        "message": "Schedule created as doctor-note (workaround)",
+                        "message": "Schedule created on board",
                         "api_response": data,
-                        "id": data.get("item", {}).get("id")
+                        "id": data.get("id")
                     }
                 else:
-                    print(f"⚠️ Schedule API returned {response.status}")
+                    error_text = await response.text()
+                    print(f"⚠️ Schedule API returned {response.status}: {error_text[:200]}")
                     with open(f"{config.output_dir}/schedule_create_response.json", "w", encoding="utf-8") as f:
-                        json.dump({"status": "error", "code": response.status}, f, ensure_ascii=False, indent=4)
+                        json.dump({"status": "error", "code": response.status, "error": error_text}, f, ensure_ascii=False, indent=4)
                     return {
                         "status": "error",
                         "message": f"Schedule creation failed (API returned {response.status})"
@@ -541,13 +545,13 @@ async def create_schedule(payload):
         }
         
 async def create_notification(payload):
-    # Note: No dedicated notification endpoint - using doctor-notes as workaround
-    url = BASE_URL + "/api/doctor-notes"
+    """Send notification using POST /api/focus/notification"""
+    url = BASE_URL + "/api/focus/notification"
     
     api_payload = {
-        "patientId": patient_manager.get_patient_id(),
-        "note": payload.get("message", "Notification from MedForce Agent"),
-        "type": "notification"
+        "message": payload.get("message", "Notification from MedForce Agent"),
+        "type": payload.get("type", "info"),  # info, success, warning, error
+        "patientId": patient_manager.get_patient_id()
     }
 
     with open(f"{config.output_dir}/notification_create_payload.json", "w", encoding="utf-8") as f:
@@ -558,31 +562,29 @@ async def create_notification(payload):
             async with session.post(url, json=api_payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
                 print(f"Notification API status: {response.status}")
                 
-                if response.status == 200:
+                if response.status in [200, 201]:
                     data = await response.json()
                     with open(f"{config.output_dir}/notification_create_response.json", "w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=4)
                     return {
                         "status": "success",
-                        "message": "Notification sent to board",
-                        "api_response": data,
-                        "payload_sent": api_payload
+                        "message": "Notification sent to all connected clients",
+                        "api_response": data
                     }
                 else:
-                    print(f"⚠️ Notification API returned {response.status}")
+                    error_text = await response.text()
+                    print(f"⚠️ Notification API returned {response.status}: {error_text[:200]}")
                     with open(f"{config.output_dir}/notification_create_response.json", "w", encoding="utf-8") as f:
-                        json.dump({"status": "error", "code": response.status}, f, ensure_ascii=False, indent=4)
+                        json.dump({"status": "error", "code": response.status, "error": error_text}, f, ensure_ascii=False, indent=4)
                     return {
-                        "status": "local",
-                        "message": f"Notification saved locally (API returned {response.status})",
-                        "payload_sent": api_payload
+                        "status": "error",
+                        "message": f"Notification failed (API returned {response.status})"
                     }
     except Exception as e:
         print(f"❌ Error sending notification: {e}")
         return {
             "status": "error",
-            "message": str(e),
-            "payload_sent": payload
+            "message": str(e)
         }
 
 async def create_legal(payload):

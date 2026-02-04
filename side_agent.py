@@ -77,6 +77,8 @@ def parse_tool(query):
         return {"query": query, "tool": "create_schedule"}
     if any(kw in q_lower for kw in ['notify', 'notification', 'alert', 'send message']):
         return {"query": query, "tool": "send_notification"}
+    if any(kw in q_lower for kw in ['lab result', 'lab value', 'add lab', 'create lab', 'post lab', 'blood test', 'liver function', 'lft']):
+        return {"query": query, "tool": "create_lab_results"}
     if any(kw in q_lower for kw in ['diagnosis', 'dili diagnosis', 'liver injury diagnosis']):
         return {"query": query, "tool": "generate_diagnosis"}
     if any(kw in q_lower for kw in ['patient report', 'summary report', 'generate report']):
@@ -670,15 +672,227 @@ async def send_notification(message: str, notification_type: str = "info"):
         return {"status": "error", "message": str(e)}
 
 
-async def create_schedule(context: str):
-    """Create schedule panel on board"""
+async def create_schedule(query: str, context: str = ""):
+    """Create schedule panel on board with structured scheduling context"""
     try:
-        result = await canvas_ops.create_schedule({
-            "schedulingContext": context
-        })
+        # Generate structured scheduling context using AI
+        _ensure_genai_configured()
+        
+        SCHEDULE_SCHEMA = {
+            "type": "OBJECT",
+            "properties": {
+                "title": {"type": "STRING"},
+                "currentStatus": {"type": "STRING"},
+                "schedulingContext": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "nextAvailableSlot": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "date": {"type": "STRING"},
+                                "provider": {"type": "STRING"},
+                                "clinicType": {"type": "STRING"},
+                                "location": {"type": "STRING"},
+                                "wait_time": {"type": "STRING"}
+                            }
+                        },
+                        "outstandingInvestigations": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "id": {"type": "STRING"},
+                                    "name": {"type": "STRING"},
+                                    "status": {"type": "STRING"},
+                                    "priority": {"type": "STRING"},
+                                    "notes": {"type": "STRING"}
+                                }
+                            }
+                        },
+                        "bookingAction": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "status": {"type": "STRING"},
+                                "lastUpdated": {"type": "STRING"},
+                                "actionsTaken": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "correspondencePreview": {"type": "STRING"}
+                            }
+                        }
+                    }
+                }
+            },
+            "required": ["title", "schedulingContext"]
+        }
+        
+        SYSTEM_PROMPT = """Generate a structured scheduling panel with appointment details, outstanding investigations, and booking actions.
+Include realistic dates (format: YYYY-MM-DDTHH:mm:ss), provider names, clinic types, investigation details, and correspondence.
+Ensure all dates are in the future and wait times are realistic."""
+        
+        model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT)
+        ehr_data = await load_ehr()
+        
+        prompt = f"""Create a scheduling panel for this request: {query}
+
+Patient context: {context if context else ehr_data}
+
+Generate complete scheduling information including next available appointment slot, outstanding investigations, and booking confirmation."""
+        
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=SCHEDULE_SCHEMA,
+                temperature=0.7,
+            )
+        )
+        
+        schedule_data = json.loads(response.text)
+        
+        # Debug output
+        print(f"📊 Generated schedule data: {json.dumps(schedule_data, indent=2)[:500]}...")
+        
+        # Add optional fields
+        schedule_data["zone"] = "task-management-zone"
+        schedule_data["width"] = 600
+        
+        # Ensure patientId is set
+        schedule_data["patientId"] = patient_manager.get_patient_id()
+        
+        result = await canvas_ops.create_schedule(schedule_data)
         return {"status": "success", "result": result}
     except Exception as e:
+        print(f"❌ Error creating schedule: {e}")
         return {"status": "error", "message": str(e)}
+
+
+# ============================================================================
+# LAB RESULTS - Parse and create lab results from natural language
+# ============================================================================
+
+async def parse_lab_values(query: str, context: str = ""):
+    """
+    Parse natural language lab values into structured lab results.
+    Example: "ALT is 150, AST is 200, bilirubin 3.5" -> structured lab payload
+    """
+    print(f"🧪 Parsing lab values from: {query[:100]}...")
+    
+    _ensure_genai_configured()
+    
+    LAB_RESPONSE_SCHEMA = {
+        "type": "OBJECT",
+        "properties": {
+            "labResults": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "parameter": {"type": "STRING", "description": "Lab parameter name (e.g., ALT, AST, Bilirubin)"},
+                        "value": {"type": "STRING", "description": "String value of the lab result"},
+                        "unit": {"type": "STRING", "description": "Unit of measurement (e.g., U/L, mg/dL, g/dL)"},
+                        "status": {"type": "STRING", "description": "Status: 'optimal', 'warning', or 'critical'"},
+                        "range": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "min": {"type": "NUMBER", "description": "Minimum normal value"},
+                                "max": {"type": "NUMBER", "description": "Maximum normal value"},
+                                "warningMin": {"type": "NUMBER", "description": "Warning threshold minimum"},
+                                "warningMax": {"type": "NUMBER", "description": "Warning threshold maximum"}
+                            },
+                            "required": ["min", "max", "warningMin", "warningMax"]
+                        },
+                        "trend": {"type": "STRING", "description": "Trend: 'stable', 'increasing', 'decreasing', or 'unknown'"}
+                    },
+                    "required": ["parameter", "value", "unit", "status", "range", "trend"]
+                }
+            },
+            "date": {"type": "STRING", "description": "Date in YYYY-MM-DD format, use today if not specified"},
+            "source": {"type": "STRING", "description": "Source of the lab results"},
+            "patientId": {"type": "STRING", "description": "Patient identifier"}
+        },
+        "required": ["labResults", "date", "source", "patientId"]
+    }
+    
+    SYSTEM_PROMPT = """You are a clinical lab results parser. Extract lab values from natural language into structured data.
+
+Common lab parameters and their normal ranges:
+- ALT (Alanine Aminotransferase): 7-56 U/L
+- AST (Aspartate Aminotransferase): 10-40 U/L
+- ALP (Alkaline Phosphatase): 44-147 U/L
+- GGT (Gamma-glutamyl Transferase): 0-45 U/L
+- Total Bilirubin: 0.2-1.2 mg/dL
+- Direct Bilirubin: 0.0-0.3 mg/dL
+- Albumin: 3.4-5.4 g/dL
+- Total Protein: 6.0-8.3 g/dL
+- INR (International Normalized Ratio): 0.9-1.1 (no unit)
+- PT (Prothrombin Time): 11-13.5 seconds
+- Creatinine: 0.7-1.3 mg/dL
+- BUN (Blood Urea Nitrogen): 7-20 mg/dL
+- Hemoglobin: 12-16 g/dL (female), 14-18 g/dL (male)
+- Platelet Count: 150-400 x10^9/L
+- WBC (White Blood Cells): 4.5-11.0 x10^9/L
+- Methotrexate Level: 0-0.5 umol/L
+
+For range object, use:
+- min/max: Normal range boundaries
+- warningMin/warningMax: Warning thresholds (typically same as min/max or slightly wider)
+
+Determine status:
+- 'optimal' if value is within normal range
+- 'warning' if value is outside normal range but not critical
+- 'critical' if value is severely abnormal (>2x upper limit or <0.5x lower limit)
+
+Trend should be:
+- 'stable' if no prior data or value appears stable
+- 'increasing' if value trending up
+- 'decreasing' if value trending down
+- 'unknown' if cannot determine
+
+Value must be a string. Use patientId from context if available."""
+
+    model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT)
+    
+    # Get today's date for default
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    patient_id = patient_manager.get_patient_id()
+    
+    prompt = f"""Parse these lab values into structured data:
+
+User input: {query}
+
+Additional context: {context if context else 'None provided'}
+
+Today's date: {today}
+Patient ID: {patient_id}
+Source: Chat input"""
+
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=LAB_RESPONSE_SCHEMA,
+                temperature=0.1,
+            )
+        )
+        
+        lab_data = json.loads(response.text)
+        
+        # Save for debugging
+        with open(f"{config.output_dir}/parsed_lab_values.json", "w", encoding="utf-8") as f:
+            json.dump(lab_data, f, indent=4)
+        
+        print(f"✅ Parsed {len(lab_data.get('labResults', []))} lab results")
+        return lab_data
+        
+    except Exception as e:
+        print(f"❌ Error parsing lab values: {e}")
+        return {
+            "labResults": [],
+            "date": today,
+            "source": "Chat input (parse error)",
+            "error": str(e)
+        }
 
 
 # ============================================================================
