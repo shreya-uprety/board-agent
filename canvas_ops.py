@@ -386,48 +386,16 @@ def create_diagnosis(payload):
     print("Start create diagnostic report")
     url = BASE_URL + "/api/diagnostic-report"
     
-    # Get patient info from cached EHR data
-    patient_name = "Unknown"
-    patient_mrn = "Unknown"
-    patient_dob = ""
-    patient_age = ""
-    patient_sex = ""
-    
-    try:
-        with open(f"{config.output_dir}/ehr_data.json", "r", encoding="utf-8") as f:
-            ehr_data = json.load(f)
-            if ehr_data and len(ehr_data) > 0:
-                sidebar = ehr_data[0]
-                patient = sidebar.get('patientData', {}).get('patient', {})
-                patient_name = patient.get('name', 'Unknown')
-                patient_mrn = patient.get('identifiers', {}).get('mrn', 'Unknown')
-                patient_dob = patient.get('date_of_birth', '')
-                patient_age = patient.get('age', '')
-                patient_sex = patient.get('sex', '')
-    except Exception as e:
-        print(f"Warning: Could not load EHR data for patient info: {e}")
-    
-    # API expects diagnosticData.patientInformation at root, not inside props
-    # LLM generates: {title, component, props: {pattern, causality, severity, management}}
-    # API needs: {diagnosticData: {patientInformation, pattern, causality, ...}, zone, patientId}
+    # AI now generates complete diagnosticData structure
+    # LLM generates: {title, component, props: {diagnosticData: {...complete structure...}}}
+    # Pass it through as-is
     props = payload.get('props', {})
+    diagnostic_data = props.get('diagnosticData', {})
     
     api_payload = {
         'title': payload.get('title', 'DILI Diagnostic Panel'),
         'component': payload.get('component', 'DILIDiagnostic'),
-        'diagnosticData': {
-            'patientInformation': {
-                'name': patient_name,
-                'mrn': patient_mrn,
-                'dateOfBirth': patient_dob,
-                'age': patient_age,
-                'sex': patient_sex
-            },
-            'pattern': props.get('pattern', {}),
-            'causality': props.get('causality', {}),
-            'severity': props.get('severity', {}),
-            'management': props.get('management', {})
-        },
+        'diagnosticData': diagnostic_data,  # Complete structure from AI
         'zone': "dili-analysis-zone",
         'patientId': patient_manager.get_patient_id()
     }
@@ -473,7 +441,6 @@ async def create_report(payload):
     
     # API expects patientData at root level, not inside props
     # The generate_patient_report() returns: {title, component, props: {patientData: {...}}}
-    # Try using nested structure like Sidebar: patientData.patient.name
     
     patient_data = {}
     if 'props' in payload and 'patientData' in payload.get('props', {}):
@@ -481,40 +448,11 @@ async def create_report(payload):
     elif 'patientData' in payload:
         patient_data = payload['patientData']
     
-    # Create both flat and nested structures for maximum compatibility
+    # Send the complete patient data structure as-is to match frontend expectations
     api_payload = {
         'title': payload.get('title', 'Patient Summary Report'),
         'component': payload.get('component', 'PatientReport'),
-        'patientData': {
-            # Flat structure (current)
-            'name': patient_data.get('name', 'Unknown'),
-            'mrn': patient_data.get('mrn', 'Unknown'),
-            'dateOfBirth': patient_data.get('date_of_birth', patient_data.get('dateOfBirth', '')),
-            'age': patient_data.get('age', ''),
-            'sex': patient_data.get('sex', ''),
-            'primaryDiagnosis': patient_data.get('primaryDiagnosis', ''),
-            'problemList': patient_data.get('problem_list', patient_data.get('problemList', [])),
-            'allergies': patient_data.get('allergies', []),
-            'medicationHistory': patient_data.get('medication_history', patient_data.get('medicationHistory', [])),
-            'acuteEventSummary': patient_data.get('acute_event_summary', patient_data.get('acuteEventSummary', '')),
-            'diagnosisAcuteEvent': patient_data.get('diagnosis_acute_event', patient_data.get('diagnosisAcuteEvent', [])),
-            'causality': patient_data.get('causality', ''),
-            'managementRecommendations': patient_data.get('management_recommendations', patient_data.get('managementRecommendations', [])),
-            # Nested structure (like Sidebar uses)
-            'patient': {
-                'name': patient_data.get('name', 'Unknown'),
-                'date_of_birth': patient_data.get('date_of_birth', patient_data.get('dateOfBirth', '')),
-                'age': patient_data.get('age', ''),
-                'sex': patient_data.get('sex', ''),
-                'identifiers': {
-                    'mrn': patient_data.get('mrn', 'Unknown')
-                }
-            },
-            'problem_list': patient_data.get('problem_list', patient_data.get('problemList', [])),
-            'medication_timeline': patient_data.get('medication_history', patient_data.get('medicationHistory', [])),
-            'description': patient_data.get('acute_event_summary', patient_data.get('acuteEventSummary', '')),
-            'riskLevel': 'high'
-        },
+        'patientData': patient_data,  # Send complete nested structure
         'zone': "patient-report-zone",
         'patientId': patient_manager.get_patient_id()
     }
@@ -651,40 +589,16 @@ async def create_legal(payload):
     """Create legal compliance report on board"""
     url = BASE_URL + "/api/legal-compliance"
     
-    # API expects legalData.identification_verification at root, not inside props
-    # LLM generates: {title, component, props: {patientInfo, adverseEventDocumentation, ...}}
-    # API needs: {title, component, legalData: {identification_verification, adverseEvents, ...}, zone, patientId}
-    
+    # AI now generates complete legalData structure with all forms
+    # LLM generates: {title, component, props: {legalData: {...complete structure...}}}
+    # Pass it through as-is
     props = payload.get('props', {})
-    patient_info = props.get('patientInfo', {})
-    care_episode = patient_info.get('careEpisode', {})
-    adverse_events = props.get('adverseEventDocumentation', {})
-    regulatory = props.get('regulatoryCompliance', {})
-    consent = props.get('consentDocumentation', {})
-    care_standards = props.get('careStandardsCompliance', {})
-    risk_mgmt = props.get('riskManagement', {})
-    recommendations = props.get('recommendations', {})
+    legal_data = props.get('legalData', {})
     
     api_payload = {
         'title': payload.get('title', 'Legal Compliance Report'),
-        'component': payload.get('component', 'LegalReport'),
-        'legalData': {
-            'identification_verification': {
-                'patient_name': patient_info.get('name', 'Unknown'),
-                'mrn': patient_info.get('mrn', 'Unknown'),
-                'date_of_birth': patient_info.get('dateOfBirth', ''),
-                'patient_id': patient_info.get('patientId', '')
-            },
-            'careEpisode': care_episode,
-            'adverseEventDocumentation': adverse_events,
-            'regulatoryCompliance': regulatory,
-            'consentDocumentation': consent,
-            'careStandardsCompliance': care_standards,
-            'riskManagement': risk_mgmt,
-            'recommendations': recommendations,
-            'reportType': payload.get('reportType', 'legal_compliance'),
-            'generatedAt': payload.get('generatedAt', '')
-        },
+        'component': payload.get('component', 'LegalCompliance'),
+        'legalData': legal_data,  # Complete structure from AI
         'zone': "medico-legal-report-zone",
         'patientId': patient_manager.get_patient_id()
     }
