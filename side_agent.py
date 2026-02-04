@@ -228,34 +228,25 @@ async def prepare_easl_query(question: str):
 
 
 async def trigger_easl(question):
-    """Send clinical question to EASL with animated TODO progress"""
+    """Send clinical question to EASL with simple animated TODO progress"""
     print("🚀 Starting EASL workflow...")
     
-    # Create TODO workflow on board for visual feedback
+    # Create simple TODO workflow on board
     easl_todo_payload = {
-        "title": "EASL Guideline Query Workflow",
-        "description": f"Processing EASL query: {question[:100]}...",
+        "title": "EASL Guideline Query",
+        "description": f"Processing: {question[:100]}...",
         "todos": [
             {
                 "id": "task-context",
-                "text": "Generating clinical context",
+                "text": "Preparing clinical context",
                 "status": "pending",
-                "agent": "Context Agent",
-                "subTodos": [
-                    {"text": f"Base question: {question[:80]}...", "status": "pending"},
-                    {"text": "Extracting relevant patient data", "status": "pending"},
-                    {"text": "Building EASL-compatible context", "status": "pending"}
-                ]
+                "agent": "Context Agent"
             },
             {
                 "id": "task-query",
                 "text": "Sending query to EASL",
                 "status": "pending",
-                "agent": "EASL Agent",
-                "subTodos": [
-                    {"text": "Formatting question for guidelines", "status": "pending"},
-                    {"text": "Submitting to EASL iframe", "status": "pending"}
-                ]
+                "agent": "EASL Agent"
             }
         ]
     }
@@ -276,10 +267,11 @@ async def trigger_easl(question):
 
 
 async def _animate_easl_todo(todo_id: str, question: str):
-    """Background task to animate TODO and process EASL query"""
+    """Background task to animate TODO and process EASL query with 2-second delays"""
     try:
-        # Phase 1: Context Generation
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-context", "index": "", "status": "executing"})
+        # Phase 1: Context Generation (pending → executing → finished)
+        await asyncio.sleep(2)
+        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-context", "status": "executing"})
         
         # Load prompts
         with open("system_prompts/context_agent.md", "r", encoding="utf-8") as f:
@@ -288,10 +280,6 @@ async def _animate_easl_todo(todo_id: str, question: str):
             SYSTEM_PROMPT_QUESTION = f.read()
         
         ehr_data = await helper_model.load_ehr()
-        
-        # Update subtodo 0
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-context", "index": "0", "status": "finished"})
-        await asyncio.sleep(0.5)
         
         # Generate context
         model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT_CONTEXT)
@@ -302,9 +290,6 @@ async def _animate_easl_todo(todo_id: str, question: str):
         with open(f"{config.output_dir}/context.md", "w", encoding="utf-8") as f:
             f.write(context_result)
         
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-context", "index": "1", "status": "finished"})
-        await asyncio.sleep(0.5)
-        
         # Generate refined question
         model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT_QUESTION)
         prompt = f"Please generate proper question: Question: {question}\n\nRaw data: {ehr_data}"
@@ -314,23 +299,19 @@ async def _animate_easl_todo(todo_id: str, question: str):
         with open(f"{config.output_dir}/question.md", "w", encoding="utf-8") as f:
             f.write(q_gen_result)
         
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-context", "index": "2", "status": "finished"})
-        await asyncio.sleep(0.3)
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-context", "index": "", "status": "finished"})
+        await asyncio.sleep(2)
+        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-context", "status": "finished"})
         
-        # Phase 2: Send to EASL
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-query", "index": "", "status": "executing"})
-        await asyncio.sleep(0.5)
-        
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-query", "index": "0", "status": "finished"})
+        # Phase 2: Send to EASL (pending → executing → finished)
+        await asyncio.sleep(2)
+        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-query", "status": "executing"})
         
         # Send to EASL iframe
         full_question = f"Context: {context_result}\n\nQuestion: {q_gen_result}"
         easl_result = await canvas_ops.initiate_easl_iframe(full_question)
         
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-query", "index": "1", "status": "finished"})
-        await asyncio.sleep(0.3)
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-query", "index": "", "status": "finished"})
+        await asyncio.sleep(2)
+        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-query", "status": "finished"})
         
         # Focus on EASL iframe
         await canvas_ops.focus_item("iframe-item-easl-interface")
@@ -476,7 +457,51 @@ async def generate_todo(query: str):
         json.dump(result, f, indent=4)
 
     response = await canvas_ops.create_todo(result)
+    
+    # Start background animation for automatic status updates
+    todo_id = response.get('id')
+    if todo_id and 'todos' in result:
+        print(f"🎬 Starting TODO animation for {todo_id} with {len(result['todos'])} tasks")
+        asyncio.create_task(_animate_todo_tasks(todo_id, result['todos']))
+    else:
+        print(f"⚠️ TODO animation skipped - todo_id: {todo_id}, has todos: {'todos' in result}")
+    
     return response
+
+
+async def _animate_todo_tasks(todo_id: str, tasks: list):
+    """Background task to automatically update TODO task statuses with 2-second delays"""
+    try:
+        print(f"🎭 Animation started for TODO {todo_id}")
+        for i, task in enumerate(tasks):
+            task_id = task.get('id')
+            if not task_id:
+                print(f"⚠️ Task {i} has no id, skipping")
+                continue
+            
+            # Mark parent task as executing
+            print(f"⏳ Task {task_id}: pending → executing")
+            await asyncio.sleep(2)
+            await canvas_ops.update_todo({"id": todo_id, "task_id": task_id, "status": "executing"})
+            
+            # Wait for subtodos (if any) - simulate processing time
+            subtodos = task.get('subTodos', [])
+            if subtodos:
+                processing_time = len(subtodos) * 2  # 2 seconds per subtodo
+                print(f"  ⏱️ Processing {len(subtodos)} subtodos ({processing_time}s)")
+                await asyncio.sleep(processing_time)
+            else:
+                # No subtodos, just wait standard time
+                await asyncio.sleep(2)
+            
+            # Mark parent task as finished
+            print(f"✅ Task {task_id}: executing → finished")
+            await canvas_ops.update_todo({"id": todo_id, "task_id": task_id, "status": "finished"})
+            await asyncio.sleep(1)  # Brief pause before next task
+        
+        print(f"✅ TODO {todo_id} animation completed")
+    except Exception as e:
+        print(f"⚠️ TODO animation error: {e}")
 
 
 # ============================================================================
@@ -521,83 +546,20 @@ This is patient encounter data: {ehr_data}"""
 # ============================================================================
 
 async def create_dili_diagnosis():
-    """Generate DILI diagnosis with TODO workflow"""
-    print("🔬 Starting DILI Diagnosis generation with TODO workflow...")
+    """Generate DILI diagnosis and post to board directly"""
+    print("🔬 Generating DILI diagnosis...")
     
     try:
-        # Step 1: Create TODO for diagnosis generation
-        todo_payload = {
-            "title": "DILI Diagnosis Generation",
-            "description": "Generating drug-induced liver injury diagnostic assessment",
-            "todos": [
-                {
-                    "id": "task-dili-1",
-                    "text": "Analyzing patient liver function data",
-                    "status": "executing",
-                    "agent": "Diagnostic Agent",
-                    "subTodos": [
-                        {"text": "Reviewing LFT results", "status": "executing"},
-                        {"text": "Checking medication history", "status": "pending"}
-                    ]
-                },
-                {
-                    "id": "task-dili-2",
-                    "text": "Generating DILI assessment",
-                    "status": "pending",
-                    "agent": "Diagnostic Agent",
-                    "subTodos": [
-                        {"text": "Applying EASL criteria", "status": "pending"},
-                        {"text": "Calculating R-ratio", "status": "pending"},
-                        {"text": "Determining causality", "status": "pending"}
-                    ]
-                },
-                {
-                    "id": "task-dili-3",
-                    "text": "Posting diagnosis to board",
-                    "status": "pending",
-                    "agent": "Canvas Agent",
-                    "subTodos": []
-                }
-            ]
-        }
-        
-        todo_response = await canvas_ops.create_todo(todo_payload)
-        todo_id = todo_response.get("id")
-        
-        if not todo_id:
-            print(f"⚠️ TODO creation failed or returned no ID: {todo_response}")
-            # Continue without TODO workflow
-            ehr_data = await load_ehr()
-            result = await generate_dili_diagnosis()
-            print("✅ DILI diagnosis generated successfully")
-            board_response = canvas_ops.create_diagnosis(result)
-            print(f"✅ DILI diagnosis posted to board")
-            return {"generated": result, "board_response": board_response, "todo_id": None}
-        
-        print(f"✅ TODO created: {todo_id}")
-        
-        # Step 2: Update task 1 to finished, task 2 to executing
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-dili-1", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-dili-2", "status": "executing"})
-        
-        # Step 3: Load EHR data and generate diagnosis
+        # Load EHR data and generate diagnosis
         ehr_data = await load_ehr()
         result = await generate_dili_diagnosis()
         print("✅ DILI diagnosis generated successfully")
         
-        # Step 4: Update task 2 to finished, task 3 to executing
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-dili-2", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-dili-3", "status": "executing"})
-        
-        # Step 5: Post to board (sync function)
+        # Post to board
         board_response = canvas_ops.create_diagnosis(result)
         print(f"✅ DILI diagnosis posted to board")
         
-        # Step 6: Mark final task as finished
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-dili-3", "status": "finished"})
-        print(f"✅ TODO workflow completed")
-        
-        return {"generated": result, "board_response": board_response, "todo_id": todo_id}
+        return {"generated": result, "board_response": board_response}
         
     except Exception as e:
         print(f"❌ DILI diagnosis error: {e}")
@@ -630,83 +592,23 @@ async def generate_dili_diagnosis():
 
 
 async def create_patient_report():
-    """Generate patient report with TODO workflow"""
-    print("📄 Starting Patient Report generation with TODO workflow...")
+    """Generate patient report and post to board directly"""
+    print("📄 Generating patient report...")
     
     try:
-        # Step 1: Create TODO for report generation
-        todo_payload = {
-            "title": "Patient Report Generation",
-            "description": "Generating comprehensive patient summary report",
-            "todos": [
-                {
-                    "id": "task-report-1",
-                    "text": "Loading patient EHR data",
-                    "status": "executing",
-                    "agent": "Report Generator Agent",
-                    "subTodos": [
-                        {"text": "Retrieving clinical history", "status": "executing"},
-                        {"text": "Analyzing lab results", "status": "pending"}
-                    ]
-                },
-                {
-                    "id": "task-report-2",
-                    "text": "Generating patient report",
-                    "status": "pending",
-                    "agent": "Report Generator Agent",
-                    "subTodos": [
-                        {"text": "Creating clinical summary", "status": "pending"},
-                        {"text": "Compiling recommendations", "status": "pending"}
-                    ]
-                },
-                {
-                    "id": "task-report-3",
-                    "text": "Posting report to board",
-                    "status": "pending",
-                    "agent": "Canvas Agent",
-                    "subTodos": []
-                }
-            ]
-        }
-        
-        todo_response = await canvas_ops.create_todo(todo_payload)
-        todo_id = todo_response.get("id")
-        
-        if not todo_id:
-            print(f"⚠️ TODO creation failed or returned no ID: {todo_response}")
-            # Continue without TODO workflow
-            result = await generate_patient_report()
-            print("✅ Patient report generated successfully")
-            board_response = await canvas_ops.create_report(result)
-            print(f"✅ Patient report posted to board")
-            return {"generated": result, "board_response": board_response, "todo_id": None}
-        
-        print(f"✅ TODO created: {todo_id}")
-        
-        # Step 2: Update task 1 to finished, task 2 to executing
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-report-1", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-report-2", "status": "executing"})
-        
-        # Step 3: Generate the report
+        # Generate the report
         result = await generate_patient_report()
         print("✅ Patient report generated successfully")
         
-        # Step 4: Update task 2 to finished, task 3 to executing
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-report-2", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-report-3", "status": "executing"})
-        
-        # Step 5: Post to board
+        # Post to board
         board_response = await canvas_ops.create_report(result)
         print(f"✅ Patient report posted to board")
         
-        # Step 6: Mark final task as finished
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-report-3", "status": "finished"})
-        print(f"✅ TODO workflow completed")
-        
-        return {"generated": result, "board_response": board_response, "todo_id": todo_id}
+        return {"generated": result, "board_response": board_response}
         
     except Exception as e:
         print(f"❌ Patient report error: {e}")
+        return {"generated": None, "board_response": {"status": "error", "message": str(e)}}
         return {"generated": None, "board_response": {"status": "error", "message": str(e)}}
 
 
@@ -736,81 +638,19 @@ async def generate_patient_report():
 
 
 async def create_legal_doc():
-    """Generate legal compliance report with TODO workflow"""
-    print("⚖️ Starting Legal Report generation with TODO workflow...")
+    """Generate legal compliance report and post to board directly"""
+    print("⚖️ Generating legal compliance report...")
     
     try:
-        # Step 1: Create TODO for legal report generation
-        todo_payload = {
-            "title": "Legal Compliance Report Generation",
-            "description": "Generating medico-legal compliance documentation",
-            "todos": [
-                {
-                    "id": "task-legal-1",
-                    "text": "Reviewing patient records for compliance",
-                    "status": "executing",
-                    "agent": "Legal Compliance Agent",
-                    "subTodos": [
-                        {"text": "Checking consent documentation", "status": "executing"},
-                        {"text": "Reviewing duty of candour", "status": "pending"}
-                    ]
-                },
-                {
-                    "id": "task-legal-2",
-                    "text": "Generating compliance report",
-                    "status": "pending",
-                    "agent": "Legal Compliance Agent",
-                    "subTodos": [
-                        {"text": "Assessing guideline adherence", "status": "pending"},
-                        {"text": "Documenting safety net advice", "status": "pending"},
-                        {"text": "Verifying practitioner details", "status": "pending"}
-                    ]
-                },
-                {
-                    "id": "task-legal-3",
-                    "text": "Posting legal report to board",
-                    "status": "pending",
-                    "agent": "Canvas Agent",
-                    "subTodos": []
-                }
-            ]
-        }
-        
-        todo_response = await canvas_ops.create_todo(todo_payload)
-        todo_id = todo_response.get("id")
-        
-        if not todo_id:
-            print(f"⚠️ TODO creation failed or returned no ID: {todo_response}")
-            # Continue without TODO workflow
-            result = await generate_legal_report()
-            print("✅ Legal report generated successfully")
-            board_response = await canvas_ops.create_legal(result)
-            print(f"✅ Legal report posted to board")
-            return {"generated": result, "board_response": board_response, "todo_id": None}
-        
-        print(f"✅ TODO created: {todo_id}")
-        
-        # Step 2: Update task 1 to finished, task 2 to executing
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-legal-1", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-legal-2", "status": "executing"})
-        
-        # Step 3: Generate the report
+        # Generate the report
         result = await generate_legal_report()
         print("✅ Legal report generated successfully")
         
-        # Step 4: Update task 2 to finished, task 3 to executing
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-legal-2", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-legal-3", "status": "executing"})
-        
-        # Step 5: Post to board using dedicated legal-compliance endpoint
+        # Post to board using dedicated legal-compliance endpoint
         board_response = await canvas_ops.create_legal(result)
         print(f"✅ Legal report posted to board")
         
-        # Step 6: Mark final task as finished
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-legal-3", "status": "finished"})
-        print(f"✅ TODO workflow completed")
-        
-        return {"generated": result, "board_response": board_response, "todo_id": todo_id}
+        return {"generated": result, "board_response": board_response}
         
     except Exception as e:
         print(f"❌ Legal report error: {e}")
