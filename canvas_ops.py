@@ -295,21 +295,19 @@ async def focus_item(item_id):
             return data
 
 async def create_todo(payload_body):
-    """Create TODO using API v2.0.0 /api/todos endpoint"""
-    url = BASE_URL + "/api/todos"
+    """Create enhanced TODO using API v2.0.0 /api/todos/enhanced endpoint
+    This allows task objects with status and agent fields that can be updated later
+    """
+    url = BASE_URL + "/api/todos/enhanced"
 
-    # API v2.0.0 expects: {title, todo_items: [...], patientId}
-    # Note: API expects 'todo_items' not 'todos'
+    # API v2.0.0 enhanced expects: {title, description, todos: [{text, status, agent}], patientId}
     
     payload = {
         "title": payload_body.get("title", "Task List"),
-        "todo_items": payload_body.get("todos", []),  # Rename 'todos' to 'todo_items'
+        "description": payload_body.get("description", ""),
+        "todos": payload_body.get("todos", []),  # Enhanced uses 'todos' with objects
         "patientId": patient_manager.get_patient_id()
     }
-    
-    # Add description if provided
-    if "description" in payload_body:
-        payload["description"] = payload_body["description"]
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload) as response:
@@ -335,26 +333,39 @@ async def create_todo(payload_body):
                 return {"id": None, "error": response_text}
 
 async def update_todo(payload):
-    """Update TODO status using POST /api/todos/update-status"""
+    """Update TODO status using POST /api/todos/update-status
+    Payload: {id, task_id, status, patientId}
+    - task_id: Use exact task_id from TODO response (e.g., "task-report-1")
+    - status: "executing" or "finished"
+    """
     url = BASE_URL + "/api/todos/update-status"
-    payload["patientId"] = patient_manager.get_patient_id()
+    
+    update_payload = {
+        "id": payload.get("id"),
+        "task_id": payload.get("task_id"),
+        "status": payload.get("status"),
+        "patientId": patient_manager.get_patient_id()
+    }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload) as response:
+        async with session.post(url, json=update_payload) as response:
             with open(f"{config.output_dir}/update_todo_payload.json", "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=4)
+                json.dump(update_payload, f, ensure_ascii=False, indent=4)
             
+            response_text = await response.text()
             print(f"Update TODO API status: {response.status}")
             
             if response.status in [200, 201]:
-                data = await response.json()
-                with open(f"{config.output_dir}/update_todo_response.json", "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=4)
-                return data
+                try:
+                    data = json.loads(response_text)
+                    with open(f"{config.output_dir}/update_todo_response.json", "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=4)
+                    return data
+                except:
+                    return {"status": "success"}
             else:
-                error_text = await response.text()
-                print(f"⚠️ Update TODO failed: {response.status} - {error_text[:200]}")
-                return {"status": "error", "code": response.status, "message": error_text}
+                print(f"⚠️ Update TODO failed: {response.status} - {response_text[:200]}")
+                return {"status": "error", "code": response.status, "message": response_text}
 
 async def create_lab(payload):
     """Create lab results - API expects individual lab results, so send each one separately"""
