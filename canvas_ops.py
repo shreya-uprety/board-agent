@@ -343,35 +343,88 @@ async def update_todo(payload):
                 return {"status": "error", "code": response.status, "message": error_text}
 
 async def create_lab(payload):
-    """Create lab results - send complete payload with labResults array"""
+    """Create lab results - API expects individual lab results, so send each one separately"""
     url = BASE_URL + "/api/lab-results"
     patient_id = patient_manager.get_patient_id()
     
-    # Ensure patientId is always set
-    payload["patientId"] = patient_id
+    lab_results = payload.get('labResults', [])
+    date = payload.get('date')
+    source = payload.get('source', 'Agent Generated')
     
-    # Debug output
-    print(f"🧪 Sending lab payload with {len(payload.get('labResults', []))} results")
-    print(f"🔧 Lab payload structure: {json.dumps(payload, indent=2)[:800]}...")
+    print(f"🧪 Sending {len(lab_results)} lab results individually...")
     
-    # API expects: full payload with labResults array
+    results = []
+    errors = []
+    
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload) as response:
-            with open(f"{config.output_dir}/lab_payload.json", "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=4)
+        for lab in lab_results:
+            # Send each lab result with fields at top level
+            unit = lab.get("unit")
+            if not unit or unit == "":
+                unit = "-"  # Use dash for dimensionless values like INR
             
-            response_text = await response.text()
-            print(f"📊 Lab API response ({response.status}): {response_text[:300]}")
+            lab_payload = {
+                "parameter": lab.get("parameter"),
+                "value": lab.get("value"),
+                "unit": unit,
+                "status": lab.get("status"),
+                "range": lab.get("range"),
+                "trend": lab.get("trend", "stable"),
+                "date": date,
+                "source": source,
+                "patientId": patient_id
+            }
+            
+            # Validate all required fields are present
+            required_fields = ["parameter", "value", "unit", "status", "range"]
+            missing = [f for f in required_fields if lab_payload.get(f) is None]
+            if missing:
+                error_msg = f"{lab.get('parameter')}: Missing required fields: {missing}"
+                errors.append(error_msg)
+                print(f"  ❌ {error_msg}")
+                continue
             
             try:
-                data = json.loads(response_text)
-            except:
-                data = {"error": "Could not parse response", "raw": response_text[:500]}
-            
-            with open(f"{config.output_dir}/lab_response.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-            
-            return data
+                async with session.post(url, json=lab_payload) as response:
+                    response_text = await response.text()
+                    
+                    if response.status in [200, 201]:
+                        try:
+                            data = json.loads(response_text)
+                            results.append(data)
+                            print(f"  ✅ {lab.get('parameter')}: {response.status}")
+                        except:
+                            results.append({"status": "success", "parameter": lab.get("parameter")})
+                    else:
+                        error_msg = f"{lab.get('parameter')}: {response.status} - {response_text[:100]}"
+                        errors.append(error_msg)
+                        print(f"  ❌ {error_msg}")
+                        # Debug output for failures
+                        print(f"     Payload: {json.dumps(lab_payload, indent=2)[:300]}")
+            except Exception as e:
+                error_msg = f"{lab.get('parameter')}: {str(e)}"
+                errors.append(error_msg)
+                print(f"  ❌ {error_msg}")
+    
+    # Save for debugging
+    with open(f"{config.output_dir}/lab_payload.json", "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=4)
+    
+    summary = {
+        "status": "success" if not errors else "partial",
+        "total": len(lab_results),
+        "successful": len(results),
+        "failed": len(errors),
+        "results": results,
+        "errors": errors if errors else None
+    }
+    
+    with open(f"{config.output_dir}/lab_response.json", "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=4)
+    
+    print(f"📊 Lab results: {len(results)}/{len(lab_results)} successful")
+    
+    return summary
 
 async def create_result(agent_result):
     url = BASE_URL + "/api/agents"

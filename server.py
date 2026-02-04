@@ -402,12 +402,18 @@ async def canvas_create_lab_results(payload: dict):
                     max_val = float(range_parts[1].strip())
                 else:
                     min_val, max_val = 0, 100
-            except:
+            except Exception as e:
+                print(f"⚠️ Error parsing range '{range_str}' for {lab.get('name') or lab.get('parameter')}: {e}")
                 min_val, max_val = 0, 100
             
             # Convert value to string
             value = lab.get('value')
             value_str = str(value) if value is not None else "0"
+            
+            # Get unit - ensure it's a string (use "-" for empty/dimensionless units)
+            unit = lab.get('unit', '')
+            if unit is None or unit == '':
+                unit = '-'  # Use dash for dimensionless values like INR
             
             # Map status: high/low/normal -> warning/critical/optimal
             status = lab.get('status', 'normal').lower()
@@ -427,7 +433,7 @@ async def canvas_create_lab_results(payload: dict):
             transformed_labs.append({
                 "parameter": lab.get('name') or lab.get('parameter'),
                 "value": value_str,
-                "unit": lab.get('unit', ''),
+                "unit": str(unit),  # Ensure string
                 "status": status,
                 "range": {
                     "min": min_val,
