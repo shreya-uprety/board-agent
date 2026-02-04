@@ -519,55 +519,24 @@ This is patient encounter data: {ehr_data}"""
 # ============================================================================
 
 async def create_dili_diagnosis():
-    """Generate DILI diagnosis with animated TODO and error handling"""
+    """Generate DILI diagnosis and post to board"""
     print("🔬 Starting DILI Diagnosis generation...")
     
-    # Create progress TODO
-    todo_payload = {
-        "title": "DILI Diagnosis Generation",
-        "description": "Generating comprehensive DILI diagnostic report",
-        "todos": [
-            {"id": "dili-1", "text": "Analyzing patient data", "status": "pending", "agent": "DILI Agent", "subTodos": [
-                {"text": "Loading EHR data", "status": "pending"},
-                {"text": "Extracting liver function tests", "status": "pending"}
-            ]},
-            {"id": "dili-2", "text": "Generating diagnosis", "status": "pending", "agent": "DILI Agent", "subTodos": [
-                {"text": "Running DILI assessment model", "status": "pending"},
-                {"text": "Creating diagnostic report", "status": "pending"}
-            ]}
-        ]
-    }
-    
-    todo_obj = await canvas_ops.create_todo(todo_payload)
-    todo_id = todo_obj.get('id')
-    
     try:
-        # Phase 1: Load data
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "dili-1", "index": "", "status": "executing"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "dili-1", "index": "0", "status": "finished"})
-        
+        # Load EHR data and generate diagnosis
         ehr_data = await load_ehr()
-        
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "dili-1", "index": "1", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "dili-1", "index": "", "status": "finished"})
-        
-        # Phase 2: Generate diagnosis
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "dili-2", "index": "", "status": "executing"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "dili-2", "index": "0", "status": "finished"})
-        
         result = await generate_dili_diagnosis()
+        print("✅ DILI diagnosis generated successfully")
         
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "dili-2", "index": "1", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "dili-2", "index": "", "status": "finished"})
-        
-        # Post to board with error handling
+        # Post to board (sync function)
         board_response = canvas_ops.create_diagnosis(result)
+        print(f"✅ DILI diagnosis posted to board")
         
-        return {"generated": result, "board_response": board_response, "todo_id": todo_id}
+        return {"generated": result, "board_response": board_response}
         
     except Exception as e:
         print(f"❌ DILI diagnosis error: {e}")
-        return {"generated": None, "board_response": {"status": "error", "message": str(e)}, "todo_id": todo_id}
+        return {"generated": None, "board_response": {"status": "error", "message": str(e)}}
 
 
 async def generate_dili_diagnosis():
@@ -596,48 +565,23 @@ async def generate_dili_diagnosis():
 
 
 async def create_patient_report():
-    """Generate patient report with animated TODO and error handling"""
+    """Generate patient report and post to board"""
     print("📄 Starting Patient Report generation...")
     
-    todo_payload = {
-        "title": "Patient Report Generation",
-        "description": "Generating comprehensive patient summary report",
-        "todos": [
-            {"id": "report-1", "text": "Compiling patient data", "status": "pending", "agent": "Report Agent", "subTodos": [
-                {"text": "Loading demographics", "status": "pending"},
-                {"text": "Gathering clinical history", "status": "pending"}
-            ]},
-            {"id": "report-2", "text": "Generating report", "status": "pending", "agent": "Report Agent", "subTodos": [
-                {"text": "Running report generation model", "status": "pending"},
-                {"text": "Formatting output", "status": "pending"}
-            ]}
-        ]
-    }
-    
-    todo_obj = await canvas_ops.create_todo(todo_payload)
-    todo_id = todo_obj.get('id')
-    
     try:
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "report-1", "index": "", "status": "executing"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "report-1", "index": "0", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "report-1", "index": "1", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "report-1", "index": "", "status": "finished"})
-        
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "report-2", "index": "", "status": "executing"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "report-2", "index": "0", "status": "finished"})
-        
+        # Generate the report
         result = await generate_patient_report()
+        print("✅ Patient report generated successfully")
         
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "report-2", "index": "1", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "report-2", "index": "", "status": "finished"})
-        
+        # Post to board
         board_response = await canvas_ops.create_report(result)
+        print(f"✅ Patient report posted to board")
         
-        return {"generated": result, "board_response": board_response, "todo_id": todo_id}
+        return {"generated": result, "board_response": board_response}
         
     except Exception as e:
         print(f"❌ Patient report error: {e}")
-        return {"generated": None, "board_response": {"status": "error", "message": str(e)}, "todo_id": todo_id}
+        return {"generated": None, "board_response": {"status": "error", "message": str(e)}}
 
 
 async def generate_patient_report():
@@ -666,49 +610,23 @@ async def generate_patient_report():
 
 
 async def create_legal_doc():
-    """Generate legal compliance report with animated TODO and error handling"""
+    """Generate legal compliance report and post to board"""
     print("⚖️ Starting Legal Report generation...")
     
-    todo_payload = {
-        "title": "Legal Compliance Report Generation",
-        "description": "Generating legal compliance and regulatory report",
-        "todos": [
-            {"id": "legal-1", "text": "Reviewing adverse events", "status": "pending", "agent": "Legal Agent", "subTodos": [
-                {"text": "Identifying reportable events", "status": "pending"},
-                {"text": "Checking regulatory requirements", "status": "pending"}
-            ]},
-            {"id": "legal-2", "text": "Generating compliance report", "status": "pending", "agent": "Legal Agent", "subTodos": [
-                {"text": "Running legal assessment model", "status": "pending"},
-                {"text": "Formatting compliance documentation", "status": "pending"}
-            ]}
-        ]
-    }
-    
-    todo_obj = await canvas_ops.create_todo(todo_payload)
-    todo_id = todo_obj.get('id')
-    
     try:
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "legal-1", "index": "", "status": "executing"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "legal-1", "index": "0", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "legal-1", "index": "1", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "legal-1", "index": "", "status": "finished"})
-        
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "legal-2", "index": "", "status": "executing"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "legal-2", "index": "0", "status": "finished"})
-        
+        # Generate the report
         result = await generate_legal_report()
+        print("✅ Legal report generated successfully")
         
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "legal-2", "index": "1", "status": "finished"})
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "legal-2", "index": "", "status": "finished"})
-        
-        # Use dedicated legal-compliance endpoint
+        # Post to board using dedicated legal-compliance endpoint
         board_response = await canvas_ops.create_legal(result)
+        print(f"✅ Legal report posted to board")
         
-        return {"generated": result, "board_response": board_response, "todo_id": todo_id}
+        return {"generated": result, "board_response": board_response}
         
     except Exception as e:
         print(f"❌ Legal report error: {e}")
-        return {"generated": None, "board_response": {"status": "error", "message": str(e)}, "todo_id": todo_id}
+        return {"generated": None, "board_response": {"status": "error", "message": str(e)}}
 
 
 async def generate_legal_report():

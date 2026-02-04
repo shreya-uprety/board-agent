@@ -295,13 +295,33 @@ async def focus_item(item_id):
             return data
 
 async def create_todo(payload_body):
+    """Create TODO using API v2.0.0 /api/todos endpoint"""
+    url = BASE_URL + "/api/todos"
 
-    url = BASE_URL + "/api/enhanced-todo"
+    # Convert old payload format to new API v2.0.0 format
+    # Old format: {title, description, todos: [{id, text, status, agent, subTodos}]}
+    # New format: {title, todo_items: [{text, status}], patientId}
+    
+    todo_items = []
+    if "todos" in payload_body:
+        for todo in payload_body["todos"]:
+            todo_items.append({
+                "text": todo.get("text", ""),
+                "status": todo.get("status", "pending")
+            })
+            # Add sub-todos as separate items
+            for sub in todo.get("subTodos", []):
+                todo_items.append({
+                    "text": f"  • {sub.get('text', '')}",
+                    "status": sub.get("status", "pending")
+                })
+    
+    payload = {
+        "title": payload_body.get("title", "Task List"),
+        "todo_items": todo_items if todo_items else [{"text": payload_body.get("description", "Task"), "status": "pending"}],
+        "patientId": patient_manager.get_patient_id()
+    }
 
-    payload = payload_body
-    payload["patientId"] = patient_manager.get_patient_id()
-
-    # response = requests.post(url, json=payload)
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload) as response:
             with open(f"{config.output_dir}/todo_payload.json", "w", encoding="utf-8") as f:
@@ -366,29 +386,51 @@ def create_diagnosis(payload):
     print("Start create diagnostic report")
     url = BASE_URL + "/api/diagnostic-report"
     
+    # Get patient info from cached EHR data
+    patient_name = "Unknown"
+    patient_mrn = "Unknown"
+    patient_dob = ""
+    patient_age = ""
+    patient_sex = ""
+    
+    try:
+        with open(f"{config.output_dir}/ehr_data.json", "r", encoding="utf-8") as f:
+            ehr_data = json.load(f)
+            if ehr_data and len(ehr_data) > 0:
+                sidebar = ehr_data[0]
+                patient = sidebar.get('patientData', {}).get('patient', {})
+                patient_name = patient.get('name', 'Unknown')
+                patient_mrn = patient.get('identifiers', {}).get('mrn', 'Unknown')
+                patient_dob = patient.get('date_of_birth', '')
+                patient_age = patient.get('age', '')
+                patient_sex = patient.get('sex', '')
+    except Exception as e:
+        print(f"Warning: Could not load EHR data for patient info: {e}")
+    
     # API expects diagnosticData.patientInformation at root, not inside props
-    # LLM generates: {title, component, props: {pattern, causality, ...}}
-    # API needs: {title, component, diagnosticData: {patientInformation, pattern, causality, ...}, zone, patientId}
-    if 'props' in payload:
-        # Restructure: create diagnosticData from props
-        api_payload = {
-            'title': payload.get('title', 'DILI Diagnostic Panel'),
-            'component': payload.get('component', 'DILIDiagnostic'),
-            'diagnosticData': {
-                'patientInformation': {
-                    'name': payload.get('props', {}).get('pattern', {}).get('patientName', 'Unknown'),
-                    'mrn': payload.get('props', {}).get('pattern', {}).get('mrn', 'Unknown')
-                },
-                **payload.get('props', {})
+    # LLM generates: {title, component, props: {pattern, causality, severity, management}}
+    # API needs: {diagnosticData: {patientInformation, pattern, causality, ...}, zone, patientId}
+    props = payload.get('props', {})
+    
+    api_payload = {
+        'title': payload.get('title', 'DILI Diagnostic Panel'),
+        'component': payload.get('component', 'DILIDiagnostic'),
+        'diagnosticData': {
+            'patientInformation': {
+                'name': patient_name,
+                'mrn': patient_mrn,
+                'dateOfBirth': patient_dob,
+                'age': patient_age,
+                'sex': patient_sex
             },
-            'zone': "dili-analysis-zone",
-            'patientId': patient_manager.get_patient_id()
-        }
-    else:
-        # Already in correct format
-        api_payload = payload.copy()
-        api_payload['zone'] = "dili-analysis-zone"
-        api_payload['patientId'] = patient_manager.get_patient_id()
+            'pattern': props.get('pattern', {}),
+            'causality': props.get('causality', {}),
+            'severity': props.get('severity', {}),
+            'management': props.get('management', {})
+        },
+        'zone': "dili-analysis-zone",
+        'patientId': patient_manager.get_patient_id()
+    }
     
     with open(f"{config.output_dir}/diagnosis_create_payload.json", "w", encoding="utf-8") as f:
         json.dump(api_payload, f, ensure_ascii=False, indent=4)
@@ -431,21 +473,51 @@ async def create_report(payload):
     
     # API expects patientData at root level, not inside props
     # The generate_patient_report() returns: {title, component, props: {patientData: {...}}}
-    # API needs: {title, component, patientData: {...}, zone, patientId}
+    # Try using nested structure like Sidebar: patientData.patient.name
+    
+    patient_data = {}
     if 'props' in payload and 'patientData' in payload.get('props', {}):
-        # Restructure: move patientData from props to root
-        api_payload = {
-            'title': payload.get('title', 'Patient Summary Report'),
-            'component': payload.get('component', 'PatientReport'),
-            'patientData': payload['props']['patientData'],
-            'zone': "patient-report-zone",
-            'patientId': patient_manager.get_patient_id()
-        }
-    else:
-        # Already in correct format or patientData at root
-        api_payload = payload.copy()
-        api_payload['zone'] = "patient-report-zone"
-        api_payload['patientId'] = patient_manager.get_patient_id()
+        patient_data = payload['props']['patientData']
+    elif 'patientData' in payload:
+        patient_data = payload['patientData']
+    
+    # Create both flat and nested structures for maximum compatibility
+    api_payload = {
+        'title': payload.get('title', 'Patient Summary Report'),
+        'component': payload.get('component', 'PatientReport'),
+        'patientData': {
+            # Flat structure (current)
+            'name': patient_data.get('name', 'Unknown'),
+            'mrn': patient_data.get('mrn', 'Unknown'),
+            'dateOfBirth': patient_data.get('date_of_birth', patient_data.get('dateOfBirth', '')),
+            'age': patient_data.get('age', ''),
+            'sex': patient_data.get('sex', ''),
+            'primaryDiagnosis': patient_data.get('primaryDiagnosis', ''),
+            'problemList': patient_data.get('problem_list', patient_data.get('problemList', [])),
+            'allergies': patient_data.get('allergies', []),
+            'medicationHistory': patient_data.get('medication_history', patient_data.get('medicationHistory', [])),
+            'acuteEventSummary': patient_data.get('acute_event_summary', patient_data.get('acuteEventSummary', '')),
+            'diagnosisAcuteEvent': patient_data.get('diagnosis_acute_event', patient_data.get('diagnosisAcuteEvent', [])),
+            'causality': patient_data.get('causality', ''),
+            'managementRecommendations': patient_data.get('management_recommendations', patient_data.get('managementRecommendations', [])),
+            # Nested structure (like Sidebar uses)
+            'patient': {
+                'name': patient_data.get('name', 'Unknown'),
+                'date_of_birth': patient_data.get('date_of_birth', patient_data.get('dateOfBirth', '')),
+                'age': patient_data.get('age', ''),
+                'sex': patient_data.get('sex', ''),
+                'identifiers': {
+                    'mrn': patient_data.get('mrn', 'Unknown')
+                }
+            },
+            'problem_list': patient_data.get('problem_list', patient_data.get('problemList', [])),
+            'medication_timeline': patient_data.get('medication_history', patient_data.get('medicationHistory', [])),
+            'description': patient_data.get('acute_event_summary', patient_data.get('acuteEventSummary', '')),
+            'riskLevel': 'high'
+        },
+        'zone': "patient-report-zone",
+        'patientId': patient_manager.get_patient_id()
+    }
 
     with open(f"{config.output_dir}/report_create_payload.json", "w", encoding="utf-8") as f:
         json.dump(api_payload, f, ensure_ascii=False, indent=4)
@@ -479,16 +551,31 @@ async def create_report(payload):
         return {"status": "local", "message": str(e), "data": payload}
         
 async def create_schedule(payload):
-    url = BASE_URL + "/api/schedule"
-    payload["patientId"] = patient_manager.get_patient_id()
+    """Create schedule using doctor-notes endpoint as workaround
+    
+    NOTE: API v2.0.0 does not have a dedicated /api/schedule endpoint.
+    Using /api/doctor-notes as a workaround until schedule endpoint is added.
+    """
+    print("⚠️ Schedule endpoint not available in API v2.0.0 - using doctor-notes workaround")
+    
+    url = BASE_URL + "/api/doctor-notes"
+    
+    # Convert schedule payload to doctor-note format
+    schedule_text = f"SCHEDULE: {payload.get('schedulingContext', 'Schedule created')}"
+    
+    api_payload = {
+        "patientId": patient_manager.get_patient_id(),
+        "note": schedule_text,
+        "type": "schedule"  # Tag it as schedule type
+    }
 
     with open(f"{config.output_dir}/schedule_create_payload.json", "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=4)
+        json.dump({"original": payload, "converted": api_payload}, f, ensure_ascii=False, indent=4)
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                print(f"Schedule API status: {response.status}")
+            async with session.post(url, json=api_payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                print(f"Schedule (via doctor-notes) API status: {response.status}")
                 
                 if response.status in [200, 201]:
                     data = await response.json()
@@ -496,17 +583,17 @@ async def create_schedule(payload):
                         json.dump(data, f, ensure_ascii=False, indent=4)
                     return {
                         "status": "success",
-                        "message": "Schedule panel created on board",
+                        "message": "Schedule created as doctor-note (workaround)",
                         "api_response": data,
-                        "id": data.get("id")
+                        "id": data.get("item", {}).get("id")
                     }
                 else:
                     print(f"⚠️ Schedule API returned {response.status}")
                     with open(f"{config.output_dir}/schedule_create_response.json", "w", encoding="utf-8") as f:
                         json.dump({"status": "error", "code": response.status}, f, ensure_ascii=False, indent=4)
                     return {
-                        "status": "local",
-                        "message": f"Schedule saved locally (API returned {response.status})"
+                        "status": "error",
+                        "message": f"Schedule creation failed (API returned {response.status})"
                     }
     except Exception as e:
         print(f"❌ Error creating schedule: {e}")
@@ -566,30 +653,41 @@ async def create_legal(payload):
     
     # API expects legalData.identification_verification at root, not inside props
     # LLM generates: {title, component, props: {patientInfo, adverseEventDocumentation, ...}}
-    # API needs: {title, component, legalData: {identification_verification, ...}, zone, patientId}
-    if 'props' in payload:
-        props = payload.get('props', {})
-        patient_info = props.get('patientInfo', {})
-        
-        api_payload = {
-            'title': payload.get('title', 'Legal Compliance Report'),
-            'component': payload.get('component', 'LegalReport'),
-            'legalData': {
-                'identification_verification': {
-                    'patient_name': patient_info.get('name', 'Unknown'),
-                    'mrn': patient_info.get('mrn', 'Unknown'),
-                    'date_of_birth': patient_info.get('dateOfBirth', ''),
-                    'patient_id': patient_info.get('patientId', '')
-                },
-                **props  # Include all the other props data
+    # API needs: {title, component, legalData: {identification_verification, adverseEvents, ...}, zone, patientId}
+    
+    props = payload.get('props', {})
+    patient_info = props.get('patientInfo', {})
+    care_episode = patient_info.get('careEpisode', {})
+    adverse_events = props.get('adverseEventDocumentation', {})
+    regulatory = props.get('regulatoryCompliance', {})
+    consent = props.get('consentDocumentation', {})
+    care_standards = props.get('careStandardsCompliance', {})
+    risk_mgmt = props.get('riskManagement', {})
+    recommendations = props.get('recommendations', {})
+    
+    api_payload = {
+        'title': payload.get('title', 'Legal Compliance Report'),
+        'component': payload.get('component', 'LegalReport'),
+        'legalData': {
+            'identification_verification': {
+                'patient_name': patient_info.get('name', 'Unknown'),
+                'mrn': patient_info.get('mrn', 'Unknown'),
+                'date_of_birth': patient_info.get('dateOfBirth', ''),
+                'patient_id': patient_info.get('patientId', '')
             },
-            'zone': "medico-legal-report-zone",
-            'patientId': patient_manager.get_patient_id()
-        }
-    else:
-        api_payload = payload.copy()
-        api_payload['zone'] = "medico-legal-report-zone"
-        api_payload['patientId'] = patient_manager.get_patient_id()
+            'careEpisode': care_episode,
+            'adverseEventDocumentation': adverse_events,
+            'regulatoryCompliance': regulatory,
+            'consentDocumentation': consent,
+            'careStandardsCompliance': care_standards,
+            'riskManagement': risk_mgmt,
+            'recommendations': recommendations,
+            'reportType': payload.get('reportType', 'legal_compliance'),
+            'generatedAt': payload.get('generatedAt', '')
+        },
+        'zone': "medico-legal-report-zone",
+        'patientId': patient_manager.get_patient_id()
+    }
 
     with open(f"{config.output_dir}/legal_create_payload.json", "w", encoding="utf-8") as f:
         json.dump(api_payload, f, ensure_ascii=False, indent=4)
