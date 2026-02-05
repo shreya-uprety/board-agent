@@ -41,6 +41,73 @@ def _get_model():
 
 MODEL = "gemini-2.0-flash"  # Faster model
 
+# Topic to board item ID mapping
+TOPIC_FOCUS_MAP = {
+    # Encounters
+    "encounter": "encounter-track-1",
+    "visit": "encounter-track-1",
+    "consultation": "encounter-track-1",
+    "appointment": "encounter-track-1",
+    "history": "encounter-track-1",
+    
+    # Labs
+    "lab": "dashboard-item-lab-table",
+    "alt": "dashboard-item-lab-table",
+    "ast": "dashboard-item-lab-table",
+    "bilirubin": "dashboard-item-lab-table",
+    "albumin": "dashboard-item-lab-table",
+    "inr": "dashboard-item-lab-table",
+    "creatinine": "dashboard-item-lab-table",
+    "hemoglobin": "dashboard-item-lab-table",
+    "platelet": "dashboard-item-lab-table",
+    "sodium": "dashboard-item-lab-table",
+    "lft": "dashboard-item-lab-table",
+    "liver function": "dashboard-item-lab-table",
+    "blood test": "dashboard-item-lab-table",
+    
+    # Lab chart
+    "chart": "dashboard-item-lab-chart",
+    "graph": "dashboard-item-lab-chart",
+    "trend": "dashboard-item-lab-chart",
+    
+    # Medications
+    "medication": "medication-track-1",
+    "drug": "medication-track-1",
+    "medicine": "medication-track-1",
+    "prescription": "medication-track-1",
+    "lactulose": "medication-track-1",
+    "furosemide": "medication-track-1",
+    "propranolol": "medication-track-1",
+    "sertraline": "medication-track-1",
+    
+    # Diagnosis
+    "diagnosis": "differential-diagnosis",
+    "differential": "differential-diagnosis",
+    "dili": "differential-diagnosis",
+    "liver injury": "differential-diagnosis",
+    
+    # Risk
+    "risk": "risk-track-1",
+    "adverse": "adverse-event-analytics",
+    "event": "risk-track-1",
+    "safety": "risk-track-1",
+    
+    # Key events
+    "timeline": "key-events-track-1",
+    "key event": "key-events-track-1",
+}
+
+
+def detect_focus_topic(query: str) -> str:
+    """Detect which board item to focus based on query keywords"""
+    query_lower = query.lower()
+    
+    for keyword, object_id in TOPIC_FOCUS_MAP.items():
+        if keyword in query_lower:
+            return object_id
+    
+    return None
+
 
 async def get_answer(query: str, conversation_text: str = '', context: str = ''):
     """Get answer from Gemini - uses cached model and pre-loaded context"""
@@ -97,9 +164,25 @@ async def chat_agent(chat_history: list[dict]) -> str:
         try:
             object_id = await side_agent.resolve_object_id(query, context)
             if object_id:
-                result = await canvas_ops.focus_item(object_id)
-                return f"✅ Navigated to {result}"
-            return "❌ Could not identify the object to navigate to"
+                await canvas_ops.focus_item(object_id)
+                # Return friendly message based on object_id
+                friendly_names = {
+                    "encounter-track-1": "encounters timeline",
+                    "dashboard-item-lab-table": "lab results table",
+                    "dashboard-item-lab-chart": "lab results chart",
+                    "lab-track-1": "lab timeline",
+                    "medication-track-1": "medication timeline",
+                    "differential-diagnosis": "differential diagnosis",
+                    "adverse-event-analytics": "adverse events analytics",
+                    "risk-track-1": "risk events timeline",
+                    "key-events-track-1": "key events timeline",
+                    "sidebar-1": "patient sidebar",
+                }
+                # Safely get friendly name
+                object_id_str = str(object_id) if not isinstance(object_id, str) else object_id
+                friendly_name = friendly_names.get(object_id_str, "the requested section")
+                return f"✅ Focused on {friendly_name}"
+            return "❌ Could not identify the section to focus on"
         except Exception as e:
             return f"❌ Navigation failed: {str(e)}"
     
@@ -139,4 +222,17 @@ async def chat_agent(chat_history: list[dict]) -> str:
                 f"{msg.get('role')}: {msg.get('content')}" 
                 for msg in chat_history[:-1]
             ])
-        return await get_answer(query, conversation_text, context)
+        
+        # Get the answer first
+        answer = await get_answer(query, conversation_text, context)
+        
+        # Auto-focus on relevant section based on query topic
+        focus_object_id = detect_focus_topic(query)
+        if focus_object_id:
+            try:
+                await canvas_ops.focus_item(focus_object_id)
+                logger.info(f"🎯 Auto-focused on: {focus_object_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Auto-focus failed: {e}")
+        
+        return answer
